@@ -14,3 +14,9 @@ One dated line per design decision, newest last. When a decision changes, update
 - 2026-10-21: setup_hook adds each cog with add_cog and passes its dependencies to the constructor, instead of loading cogs as extensions.
 - 2026-10-21: The default help command is removed, so @MovieBot sync stays the only text command.
 - 2026-10-21: Settings read .env without changing os.environ. Real environment variables win over the file, and a blank value counts as not set.
+- 2026-10-21: One shared aiosqlite connection. Writes go through Database.transaction(), which holds an asyncio lock, so two commands can't mix their writes into one transaction.
+- 2026-10-21: The migration runner is the only code that builds SQL text. It wraps each file in BEGIN and COMMIT and sets PRAGMA user_version from the file's number, because PRAGMA can't take ? placeholders. Both come from the repo, never from users.
+- 2026-10-21: migrations/ stays at the repo root, as in the spec. database.py finds it relative to the source tree, which works because the bot always runs from a checkout.
+- 2026-10-21: Categories get their own small repository, db/categories.py, because /add and /list need them before the seed import exists.
+- 2026-10-21: Services raise DomainError subclasses with plain-text messages. ui/errors.py turns those, and cooldowns, into private replies for commands and buttons alike, so cogs need no try/except.
+- 2026-10-21: /add takes an optional year. From M3 it covers titles that aren't picked from TMDB.

@@ -1,0 +1,201 @@
+"""WatchlistService: adding films (FR-2, FR-4) and listing them (FR-3)."""
+
+import json
+from pathlib import Path
+
+import pytest
+
+from moviebot.db.categories import CategoryRepository
+from moviebot.db.films import FilmRepository
+from moviebot.models import (
+    Category,
+    DuplicateFilm,
+    FilmPage,
+    InvalidFilm,
+    NewFilm,
+    UnknownCategory,
+)
+from moviebot.services.watchlist import WatchlistService, make_slug
+
+SEED_FILE = Path(__file__).parents[1] / "watchlist_seed.json"
+WATCHED_AT = "2026-10-20T10:00:00Z"
+
+
+def titles(page: FilmPage) -> list[str]:
+    return [film.title for film in page.films]
+
+
+async def test_add_saves_a_trimmed_film_with_its_slug(watchlist: WatchlistService) -> None:
+    added = await watchlist.add_film(
+        title="  Heropanti ", year=2014, note="  Tiger's debut ", added_by=42
+    )
+
+    film = added.film
+    assert (film.title, film.year, film.slug) == ("Heropanti", 2014, "heropanti-2014")
+    assert (film.note, film.added_by, film.watched_at) == ("Tiger's debut", 42, None)
+    assert added.category is None
+    assert added.same_title is None
+
+
+async def test_add_accepts_the_longest_title_and_note(watchlist: WatchlistService) -> None:
+    added = await watchlist.add_film(title="x" * 200, note="y" * 500, year=1888)
+
+    assert len(added.film.title) == 200
+    assert added.film.note is not None
+    assert len(added.film.note) == 500
+
+
+async def test_add_rejects_duplicate_title_and_year(watchlist: WatchlistService) -> None:
+    await watchlist.add_film(title="Heropanti", year=2014)
+
+    with pytest.raises(DuplicateFilm) as caught:
+        await watchlist.add_film(title="HEROPANTI", year=2014)
+
+    assert caught.value.existing.title == "Heropanti"
+    assert str(caught.value) == "Heropanti (2014) is already on the list."
+
+
+async def test_add_rejects_duplicate_tmdb_id(watchlist: WatchlistService) -> None:
+    await watchlist.add_film(title="Heropanti", year=2014, tmdb_id=280391)
+
+    with pytest.raises(DuplicateFilm, match=r"Heropanti \(2014\)"):
+        await watchlist.add_film(title="Heropanti (Hindi)", year=2014, tmdb_id=280391)
+
+
+async def test_add_allows_the_same_title_in_another_year(watchlist: WatchlistService) -> None:
+    first = await watchlist.add_film(title="Don", year=1978)
+    second = await watchlist.add_film(title="Don", year=2006)
+
+    assert (first.film.slug, second.film.slug) == ("don-1978", "don-2006")
+    assert second.same_title is None
+
+
+async def test_add_without_a_year_flags_the_same_title(watchlist: WatchlistService) -> None:
+    await watchlist.add_film(title="Heropanti", year=2014)
+
+    added = await watchlist.add_film(title="heropanti")
+
+    assert added.film.slug == "heropanti"
+    assert added.same_title is not None
+    assert added.same_title.label == "Heropanti (2014)"
+
+
+@pytest.mark.parametrize(
+    ("title", "note", "year", "message"),
+    [
+        ("   ", None, None, "title must be 1 to 200 characters"),
+        ("x" * 201, None, None, "title must be 1 to 200 characters"),
+        ("Heropanti", "x" * 501, None, "note can be at most 500 characters"),
+        ("Heropanti", None, 1887, "year must be between 1888 and 2100"),
+        ("Heropanti", None, 2101, "year must be between 1888 and 2100"),
+    ],
+)
+async def test_add_rejects_bad_input(
+    watchlist: WatchlistService, title: str, note: str | None, year: int | None, message: str
+) -> None:
+    with pytest.raises(InvalidFilm, match=message):
+        await watchlist.add_film(title=title, note=note, year=year)
+
+
+async def test_add_checks_the_category(watchlist: WatchlistService, launch: Category) -> None:
+    with pytest.raises(UnknownCategory, match='no category called "nope"'):
+        await watchlist.add_film(title="Heropanti", year=2014, category_key="nope")
+
+    added = await watchlist.add_film(title="Heropanti", year=2014, category_key="launch")
+
+    assert added.film.category_key == "launch"
+    assert added.category == launch
+
+
+@pytest.mark.parametrize(
+    ("title", "year", "slug"),
+    [
+        ("Heropanti", None, "heropanti"),
+        ("  --Ra.One--  ", 2011, "ra-one-2011"),
+        ("दिल", 1990, "film-1990"),  # no a-z or 0-9 in the title at all
+    ],
+)
+def test_make_slug_edge_cases(title: str, year: int | None, slug: str) -> None:
+    assert make_slug(title, year) == slug
+
+
+def test_make_slug_matches_every_id_in_the_seed_file() -> None:
+    seed = json.loads(SEED_FILE.read_text(encoding="utf-8"))
+
+    for film in seed["films"]:
+        assert make_slug(film["title"], film["year"]) == film["id"]
+
+
+async def test_slug_gets_a_number_when_taken(watchlist: WatchlistService) -> None:
+    slugs = [
+        (await watchlist.add_film(title=title, year=2006)).film.slug
+        for title in ("Don", "Don!", "Don?")
+    ]
+
+    assert slugs == ["don-2006", "don-2006-2", "don-2006-3"]
+
+
+async def test_list_shows_unwatched_films_10_a_page_by_title(watchlist: WatchlistService) -> None:
+    for number in reversed(range(25)):
+        await watchlist.add_film(title=f"Film {number:02}", year=2000)
+
+    first = await watchlist.list_films()
+    last = await watchlist.list_films(page=3)
+
+    assert (first.page, first.page_count, first.total, first.per_page) == (1, 3, 25, 10)
+    assert first.show == "unwatched"
+    assert titles(first)[:3] == ["Film 00", "Film 01", "Film 02"]
+    assert titles(last) == ["Film 20", "Film 21", "Film 22", "Film 23", "Film 24"]
+
+
+async def test_list_filters_by_watched_state_and_category(
+    watchlist: WatchlistService, films: FilmRepository, launch: Category
+) -> None:
+    await watchlist.add_film(title="Heropanti", year=2014, category_key="launch")
+    await watchlist.add_film(title="Dhoom", year=2004)
+    await films.add(
+        NewFilm(
+            slug="student-of-the-year-2012",
+            title="Student of the Year",
+            year=2012,
+            category_key="launch",
+            watched_at=WATCHED_AT,
+        )
+    )
+
+    assert titles(await watchlist.list_films()) == ["Dhoom", "Heropanti"]
+    assert titles(await watchlist.list_films(show="watched")) == ["Student of the Year"]
+    assert titles(await watchlist.list_films(show="all")) == [
+        "Dhoom",
+        "Heropanti",
+        "Student of the Year",
+    ]
+    in_launch = await watchlist.list_films(show="all", category_key="launch")
+    assert titles(in_launch) == ["Heropanti", "Student of the Year"]
+    assert in_launch.category == launch
+    assert in_launch.category_names == {"launch": "The launch"}
+
+
+async def test_list_keeps_the_page_number_in_range(watchlist: WatchlistService) -> None:
+    empty = await watchlist.list_films(page=4)
+    assert (empty.page, empty.page_count, empty.total, empty.films) == (1, 1, 0, ())
+
+    for title in ("A", "B", "C"):
+        await watchlist.add_film(title=title, year=2000)
+
+    assert (await watchlist.list_films(page=9)).page == 1
+    assert (await watchlist.list_films(page=0)).page == 1
+
+
+async def test_list_rejects_an_unknown_category(watchlist: WatchlistService) -> None:
+    with pytest.raises(UnknownCategory):
+        await watchlist.list_films(category_key="nope")
+
+
+async def test_list_categories_in_display_order(
+    watchlist: WatchlistService, categories: CategoryRepository, launch: Category
+) -> None:
+    noir = Category(key="noir", name="A nobody in over his head", position=12, side="good")
+    await categories.add(noir)
+
+    assert await watchlist.list_categories() == [launch, noir]

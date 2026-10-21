@@ -294,7 +294,7 @@ Users work the bot through twelve slash commands and four kinds of button. "Priv
 
 | Command | Options | Who can use it | Reply | What it does |
 | --- | --- | --- | --- | --- |
-| `/add` | `title` (TMDB search as you type), `category` (optional choice), `note` (optional, up to 500 characters) | Everyone | Public | Saves the film and posts its card. Refuses duplicates. For a do-not-watch film, shows the reason and asks to confirm. |
+| `/add` | `title` (TMDB search as you type), `year` (optional, for a title not picked from TMDB), `category` (optional choice), `note` (optional, up to 500 characters) | Everyone | Public | Saves the film and posts its card. Refuses duplicates. For a do-not-watch film, shows the reason and asks to confirm. |
 | `/list` | `show` (unwatched, watched or all; default unwatched), `category` (optional) | Everyone | Public | 10 films a page, with Previous, Next and Suggest buttons. |
 | `/suggest` | `category`, `genre`, `side` (all optional) | Everyone | Public | Picks a film and posts its card, with Another and We're watching this buttons. |
 | `/watched` | `film` (search unwatched films) | Everyone | Public | Marks the film watched. |
@@ -343,9 +343,10 @@ These rules live in the service layer and each one gets a unit test. The suggest
 
 **Adding a film (FR-2, FR-4, FR-5, FR-17)**
 
-- The title is trimmed and must be 1 to 200 characters. A note may be up to 500.
+- The title is trimmed and must be 1 to 200 characters. A note may be up to 500, and a year, when given, is between 1888 and 2100.
 - When the user picks a TMDB result, the bot stores TMDB's title and year, plus `tmdb_id`, `poster_path` and `runtime_min`.
 - It is a duplicate if the `tmdb_id` exists, or if the lower-cased title and the year match an existing film. The reply names the existing entry.
+- A film added without a year is never a duplicate, but if a film with the same title is already listed, the reply warns and names it.
 - The slug is the lower-cased title with every run of other characters turned into a hyphen, then the year: `heropanti-2014`. If it's taken, add `-2`, `-3` and so on.
 - If the title and year match the do-not-watch list, ignoring case, the bot shows the stored reason and adds the film only after Confirm.
 
@@ -473,7 +474,7 @@ Done when: `/ping` answers in the test server, and an exception raised on purpos
 - [ ] `migrations/0001_init.sql`, from the Data model section.
 - [ ] `FilmRepository` with add, get, find duplicate, list one page, and delete.
 - [ ] `WatchlistService.add_film` and `list_films`, with unit tests on an in-memory database.
-- [ ] `/add` with a plain-text title, and `/list` with Previous and Next.
+- [ ] `/add` with a plain-text title and an optional year, and `/list` with Previous and Next.
 
 Done when: films survive a restart, a duplicate is refused, and the tests pass in CI.
 

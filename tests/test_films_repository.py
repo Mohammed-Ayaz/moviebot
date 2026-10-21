@@ -1,0 +1,103 @@
+"""FilmRepository and CategoryRepository: the SQL itself, on a fresh in-memory database."""
+
+from dataclasses import replace
+
+import aiosqlite
+import pytest
+
+from moviebot.db.categories import CategoryRepository
+from moviebot.db.films import FilmRepository
+from moviebot.models import Category, NewFilm
+
+WATCHED_AT = "2026-10-20T10:00:00Z"
+
+
+async def test_add_returns_the_stored_film(films: FilmRepository) -> None:
+    film = await films.add(
+        NewFilm(slug="heropanti-2014", title="Heropanti", year=2014, added_by=42)
+    )
+
+    assert film.id > 0
+    assert (film.slug, film.title, film.year, film.added_by) == (
+        "heropanti-2014",
+        "Heropanti",
+        2014,
+        42,
+    )
+    assert film.added_at.endswith("Z")
+    assert film.is_indian is True
+    assert film.watched_at is None
+    assert await films.get(film.id) == film
+
+
+async def test_unique_index_refuses_same_title_and_year(films: FilmRepository) -> None:
+    await films.add(NewFilm(slug="heropanti-2014", title="Heropanti", year=2014))
+
+    with pytest.raises(aiosqlite.IntegrityError):
+        await films.add(NewFilm(slug="heropanti-2014-2", title="HEROPANTI", year=2014))
+
+    # The failed insert was rolled back, so the next one works.
+    await films.add(NewFilm(slug="heropanti-2-2022", title="Heropanti 2", year=2022))
+
+
+async def test_films_without_a_year_never_match_as_duplicates(films: FilmRepository) -> None:
+    await films.add(NewFilm(slug="mystery", title="Mystery", year=None))
+    await films.add(NewFilm(slug="mystery-2", title="Mystery", year=None))
+
+    assert await films.find_duplicate(title="mystery", year=None, tmdb_id=None) is None
+    same_title = await films.find_by_title("MYSTERY")
+    assert same_title is not None
+    assert same_title.slug == "mystery"
+
+
+async def test_find_duplicate_by_tmdb_id_or_title_and_year(films: FilmRepository) -> None:
+    film = await films.add(NewFilm(slug="heropanti-2014", title="Heropanti", year=2014, tmdb_id=7))
+
+    assert await films.find_duplicate(title="Other", year=1999, tmdb_id=7) == film
+    assert await films.find_duplicate(title="heroPANTI", year=2014, tmdb_id=None) == film
+    assert await films.find_duplicate(title="Heropanti", year=2015, tmdb_id=None) is None
+    assert await films.slug_taken("heropanti-2014")
+    assert not await films.slug_taken("heropanti")
+
+
+async def test_count_and_list_page_filter_and_page(films: FilmRepository, launch: Category) -> None:
+    for number in range(12):
+        category = launch.key if number < 5 else None
+        await films.add(
+            NewFilm(
+                slug=f"film-{number}", title=f"Film {number:02}", year=2000, category_key=category
+            )
+        )
+    await films.add(NewFilm(slug="seen-2001", title="Seen", year=2001, watched_at=WATCHED_AT))
+
+    assert await films.count(show="unwatched", category_key=None) == 12
+    assert await films.count(show="watched", category_key=None) == 1
+    assert await films.count(show="all", category_key=None) == 13
+    assert await films.count(show="unwatched", category_key="launch") == 5
+
+    second_page = await films.list_page(show="unwatched", category_key=None, limit=10, offset=10)
+    assert [film.title for film in second_page] == ["Film 10", "Film 11"]
+    watched = await films.list_page(show="watched", category_key=None, limit=10, offset=0)
+    assert [film.title for film in watched] == ["Seen"]
+
+
+async def test_delete_removes_the_film(films: FilmRepository) -> None:
+    film = await films.add(NewFilm(slug="heropanti-2014", title="Heropanti", year=2014))
+
+    assert await films.delete(film.id) is True
+    assert await films.get(film.id) is None
+    assert await films.delete(film.id) is False
+
+
+async def test_unknown_category_is_refused_by_the_foreign_key(films: FilmRepository) -> None:
+    with pytest.raises(aiosqlite.IntegrityError):
+        await films.add(NewFilm(slug="x", title="X", year=None, category_key="nope"))
+
+
+async def test_category_add_leaves_an_existing_key_alone(
+    categories: CategoryRepository, launch: Category
+) -> None:
+    assert await categories.add(replace(launch, name="Renamed")) is False
+    assert await categories.get("launch") == launch
+    assert await categories.get("nope") is None
+    assert await categories.list_all() == [launch]

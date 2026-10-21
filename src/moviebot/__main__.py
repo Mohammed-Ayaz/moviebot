@@ -8,14 +8,23 @@ import discord
 
 from moviebot.bot import MovieBot
 from moviebot.config import ConfigError, Settings, load_settings
+from moviebot.db.categories import CategoryRepository
+from moviebot.db.database import open_database
+from moviebot.db.films import FilmRepository
+from moviebot.services.watchlist import WatchlistService
 
 log = logging.getLogger(__name__)
 
 
 async def main(settings: Settings) -> None:
-    """Create the bot and run it until it stops."""
-    async with MovieBot(settings) as bot:
-        await bot.start(settings.discord_token)
+    """Open the database, build the services, and run the bot until it stops."""
+    db = await open_database(settings.database_path)
+    try:
+        watchlist = WatchlistService(FilmRepository(db), CategoryRepository(db))
+        async with MovieBot(settings, watchlist=watchlist) as bot:
+            await bot.start(settings.discord_token)
+    finally:
+        await db.close()
 
 
 def run() -> None:

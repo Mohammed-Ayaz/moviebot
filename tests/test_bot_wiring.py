@@ -8,6 +8,7 @@ import pytest
 
 from moviebot.bot import MovieBot, MovieTree
 from moviebot.config import Settings
+from moviebot.services.watchlist import WatchlistService
 
 SETTINGS = Settings.from_env(
     {"DISCORD_TOKEN": "discord-test-token", "TMDB_READ_TOKEN": "tmdb-test-token", "GUILD_ID": "1"}
@@ -15,9 +16,9 @@ SETTINGS = Settings.from_env(
 
 
 @pytest.fixture
-async def bot() -> AsyncIterator[MovieBot]:
+async def bot(watchlist: WatchlistService) -> AsyncIterator[MovieBot]:
     """A bot that has run setup_hook, as it does at startup, but never connects."""
-    async with MovieBot(SETTINGS) as movie_bot:
+    async with MovieBot(SETTINGS, watchlist=watchlist) as movie_bot:
         await movie_bot.setup_hook()
         yield movie_bot
 
@@ -39,13 +40,15 @@ def test_sync_is_the_only_text_command(bot: MovieBot) -> None:
     assert sorted(command.name for command in bot.commands) == ["sync"]
 
 
-def test_ping_is_a_slash_command_on_movie_tree(bot: MovieBot) -> None:
+def test_slash_commands_are_registered_on_movie_tree(bot: MovieBot) -> None:
     assert isinstance(bot.tree, MovieTree)
-    assert bot.tree.get_command("ping") is not None
+    assert sorted(command.name for command in bot.tree.get_commands()) == ["add", "list", "ping"]
 
 
-async def test_startup_never_syncs(monkeypatch: pytest.MonkeyPatch) -> None:
-    async with MovieBot(SETTINGS) as movie_bot:
+async def test_startup_never_syncs(
+    monkeypatch: pytest.MonkeyPatch, watchlist: WatchlistService
+) -> None:
+    async with MovieBot(SETTINGS, watchlist=watchlist) as movie_bot:
         sync = AsyncMock()
         monkeypatch.setattr(movie_bot.tree, "sync", sync)
         await movie_bot.setup_hook()

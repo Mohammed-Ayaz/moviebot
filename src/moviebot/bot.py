@@ -10,11 +10,12 @@ from discord import app_commands
 from discord.ext import commands
 
 from moviebot.cogs.admin import AdminCog
+from moviebot.cogs.watchlist import WatchlistCog
 from moviebot.config import Settings
+from moviebot.services.watchlist import WatchlistService
+from moviebot.ui.errors import report_error
 
 log = logging.getLogger(__name__)
-
-ERROR_REPLY = "Something went wrong."
 
 
 class MovieTree(app_commands.CommandTree):
@@ -23,22 +24,14 @@ class MovieTree(app_commands.CommandTree):
     async def on_error(
         self, interaction: discord.Interaction, error: app_commands.AppCommandError, /
     ) -> None:
-        """Log the traceback and tell the user privately. Never raises."""
-        name = interaction.command.qualified_name if interaction.command else "unknown"
-        log.error("Error in /%s", name, exc_info=error)
-        try:
-            if interaction.response.is_done():
-                await interaction.followup.send(ERROR_REPLY, ephemeral=True)
-            else:
-                await interaction.response.send_message(ERROR_REPLY, ephemeral=True)
-        except discord.HTTPException:
-            log.warning("Couldn't tell the user about the error in /%s", name, exc_info=True)
+        """Reply privately with the broken rule, the cooldown, or "Something went wrong."."""
+        await report_error(interaction, error)
 
 
 class MovieBot(commands.Bot):
     """Movie Night Bot: slash commands and buttons, plus the owner's `@MovieBot sync`."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, watchlist: WatchlistService) -> None:
         super().__init__(
             command_prefix=commands.when_mentioned,
             help_command=None,  # so `@MovieBot sync` stays the only text command
@@ -47,10 +40,12 @@ class MovieBot(commands.Bot):
             allowed_mentions=discord.AllowedMentions.none(),  # nothing the bot posts pings anyone
         )
         self.settings = settings
+        self.watchlist = watchlist
 
     async def setup_hook(self) -> None:
         """Add the cogs. Never sync here: slash commands sync only on `@MovieBot sync`."""
         await self.add_cog(AdminCog(self, guild_id=self.settings.guild_id))
+        await self.add_cog(WatchlistCog(self.watchlist))
 
     async def on_ready(self) -> None:
         """Log the login, and warn if the bot isn't in the GUILD_ID server."""
