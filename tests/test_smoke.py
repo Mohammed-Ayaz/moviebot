@@ -1,12 +1,16 @@
-"""Smoke test: the package and every layer import cleanly."""
+"""Smoke test: every module imports cleanly and has a docstring."""
 
 import importlib
 
 import pytest
 
-LAYERS = [
+MODULES = [
     "moviebot",
+    "moviebot.__main__",
+    "moviebot.bot",
+    "moviebot.config",
     "moviebot.cogs",
+    "moviebot.cogs.admin",
     "moviebot.ui",
     "moviebot.services",
     "moviebot.db",
@@ -14,6 +18,6 @@ LAYERS = [
 ]
 
 
-@pytest.mark.parametrize("module", LAYERS)
-def test_layer_imports(module: str) -> None:
+@pytest.mark.parametrize("module", MODULES)
+def test_module_imports(module: str) -> None:
     assert importlib.import_module(module).__doc__
