@@ -19,6 +19,7 @@ MODULES = [
     "moviebot.ui.choices",
     "moviebot.ui.embeds",
     "moviebot.ui.errors",
+    "moviebot.ui.modals",
     "moviebot.ui.views",
     "moviebot.services",
     "moviebot.services.picker",

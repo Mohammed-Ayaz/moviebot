@@ -1,4 +1,4 @@
-"""/add and /list: read the options, call WatchlistService, draw the replies.
+"""The watchlist commands: read the options, call WatchlistService, draw the replies.
 
 Rules the service enforces come back as DomainErrors, which MovieTree shows privately.
 """
@@ -11,13 +11,15 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from moviebot.models import AddedFilm, Show
+from moviebot.models import AddedFilm, Film, Show
 from moviebot.services.watchlist import MAX_NOTE, MAX_TITLE, MAX_YEAR, MIN_YEAR, WatchlistService
-from moviebot.ui.choices import category_choices
+from moviebot.ui.choices import category_choices, film_choices, tmdb_choices
 from moviebot.ui.embeds import film_card, list_embed
-from moviebot.ui.views import ListView, suggest_view
+from moviebot.ui.modals import EditFilmModal
+from moviebot.ui.views import ConfirmRemoveView, ListView, suggest_view
 
-TMDB_PICK = re.compile(r"tmdb:(\d+)")  # the value of a suggestion picked from the list
+TMDB_PICK = re.compile(r"tmdb:(\d+)")  # the value of a TMDB suggestion picked from the list
+FILM_PICK = re.compile(r"film:(\d+)")  # the value of a film picked from the list
 SUGGEST_SECONDS = 1.8  # Discord waits 3 seconds for suggestions; leave time to send them
 SHOW_CHOICES = [
     app_commands.Choice(name="Unwatched", value="unwatched"),
@@ -27,7 +29,7 @@ SHOW_CHOICES = [
 
 
 class WatchlistCog(commands.Cog):
-    """/add and /list."""
+    """/add, /list, /remove, /edit, /watched and /unwatch."""
 
     def __init__(self, watchlist: WatchlistService) -> None:
         self.watchlist = watchlist
@@ -80,10 +82,7 @@ class WatchlistCog(commands.Cog):
                 movies = await self.watchlist.search_tmdb(current)
         except TimeoutError:
             return []
-        return [
-            app_commands.Choice(name=_shorten(movie.label), value=f"tmdb:{movie.id}")
-            for movie in movies[:25]
-        ]
+        return tmdb_choices(movies)
 
     @add.autocomplete("category")
     async def add_category(
@@ -122,6 +121,92 @@ class WatchlistCog(commands.Cog):
     ) -> list[app_commands.Choice[str]]:
         return category_choices(await self.watchlist.list_categories(), current)
 
+    @app_commands.command(name="remove", description="Remove a film from the watchlist.")
+    @app_commands.describe(film="Start typing, then pick the film from the list")
+    async def remove(self, interaction: discord.Interaction, film: str) -> None:
+        """FR-11: ask privately. Confirm removes the film and says so publicly."""
+        chosen = await self._film(film)
+        view = ConfirmRemoveView(self.watchlist, chosen, user_id=interaction.user.id)
+        label = discord.utils.escape_markdown(chosen.label)
+        await interaction.response.send_message(
+            f"Remove {label} from the list? This can't be undone.", view=view, ephemeral=True
+        )
+        view.interaction = interaction
+
+    @remove.autocomplete("film")
+    async def remove_suggestions(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        return film_choices(await self.watchlist.search_films(current))
+
+    @app_commands.command(name="edit", description="Change a film's note or category.")
+    @app_commands.describe(
+        film="Start typing, then pick the film from the list",
+        category="Move the film to this category",
+    )
+    async def edit(
+        self, interaction: discord.Interaction, film: str, category: str | None = None
+    ) -> None:
+        """FR-12: open the pop-up with the note filled in. Saving also sets the category."""
+        chosen = await self._film(film)
+        await self.watchlist.category(category)  # refuse an unknown category before the pop-up
+        await interaction.response.send_modal(
+            EditFilmModal(self.watchlist, chosen, category_key=category)
+        )
+
+    @edit.autocomplete("film")
+    async def edit_suggestions(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        return film_choices(await self.watchlist.search_films(current))
+
+    @edit.autocomplete("category")
+    async def edit_category(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        return category_choices(await self.watchlist.list_categories(), current)
+
+    @app_commands.command(name="watched", description="Mark a film as watched.")
+    @app_commands.describe(film="Start typing, then pick the film from the list")
+    async def watched(self, interaction: discord.Interaction, film: str) -> None:
+        """FR-13: mark the film watched, and say so publicly."""
+        chosen = await self._film(film, watched=False)
+        updated = await self.watchlist.mark_watched(chosen.id)
+        label = discord.utils.escape_markdown(updated.label)
+        await interaction.response.send_message(f"Marked {label} as watched.")
+
+    @watched.autocomplete("film")
+    async def watched_suggestions(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        return film_choices(await self.watchlist.search_films(current, watched=False))
+
+    @app_commands.command(
+        name="unwatch", description="Put a watched film back on the unwatched list."
+    )
+    @app_commands.describe(film="Start typing, then pick the film from the list")
+    async def unwatch(self, interaction: discord.Interaction, film: str) -> None:
+        """FR-13: undo /watched, privately."""
+        chosen = await self._film(film, watched=True)
+        updated = await self.watchlist.unwatch(chosen.id)
+        label = discord.utils.escape_markdown(updated.label)
+        await interaction.response.send_message(
+            f"{label} is back on the unwatched list.", ephemeral=True
+        )
+
+    @unwatch.autocomplete("film")
+    async def unwatch_suggestions(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        return film_choices(await self.watchlist.search_films(current, watched=True))
+
+    async def _film(self, value: str, *, watched: bool | None = None) -> Film:
+        """The film picked from the suggestions, or else the one film with exactly that title."""
+        pick = FILM_PICK.fullmatch(value)
+        if pick is not None:
+            return await self.watchlist.get_film(int(pick[1]))
+        return await self.watchlist.film_named(value, watched=watched)
+
 
 def _confirmation(added: AddedFilm) -> str:
     """The private reply to /add: what was added, and anything the adder should know."""
@@ -134,8 +219,3 @@ def _confirmation(added: AddedFilm) -> str:
         same = discord.utils.escape_markdown(added.same_title.label)
         lines.append(f"Heads up: {same} is already on the list, so this may be a duplicate.")
     return "\n".join(lines)
-
-
-def _shorten(text: str, limit: int = 100) -> str:
-    """Fit a suggestion's name into Discord's 100-character limit."""
-    return text if len(text) <= limit else text[: limit - 1] + "…"

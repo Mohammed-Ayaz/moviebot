@@ -28,7 +28,9 @@ async def report_error(interaction: discord.Interaction, error: Exception) -> No
         seconds = max(1, math.ceil(error.retry_after))
         text = f"Slow down: try again in {seconds} second{'' if seconds == 1 else 's'}."
     else:
-        where = f"/{interaction.command.qualified_name}" if interaction.command else "a button"
+        where = (
+            f"/{interaction.command.qualified_name}" if interaction.command else "a button or form"
+        )
         log.error("Error in %s", where, exc_info=error)
         text = ERROR_REPLY
     try:

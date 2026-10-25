@@ -93,6 +93,14 @@ class AddedFilm:
 
 
 @dataclass(frozen=True)
+class FilmInfo:
+    """A film with its category, which is what a film card needs."""
+
+    film: Film
+    category: Category | None
+
+
+@dataclass(frozen=True)
 class FilmPage:
     """One page of /list, with the filters that produced it."""
 
@@ -186,4 +194,30 @@ class AlreadyWatched(DomainError):
 
     def __init__(self, film: Film) -> None:
         super().__init__(f"{film.label} is already marked as watched.")
+        self.film = film
+
+
+class UnknownFilm(DomainError):
+    """No film on the list has the title someone typed."""
+
+    def __init__(self, title: str) -> None:
+        super().__init__(
+            f'There\'s no film called "{title}" on the list. Pick one from the suggestions.'
+        )
+        self.title = title
+
+
+class AmbiguousFilm(DomainError):
+    """Several films on the list have the title someone typed."""
+
+    def __init__(self, title: str) -> None:
+        super().__init__(f'Several films are called "{title}". Pick one from the suggestions.')
+        self.title = title
+
+
+class NotWatched(DomainError):
+    """The film isn't marked as watched."""
+
+    def __init__(self, film: Film) -> None:
+        super().__init__(f"{film.label} isn't marked as watched.")
         self.film = film

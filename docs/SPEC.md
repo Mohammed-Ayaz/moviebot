@@ -50,9 +50,9 @@ v1 has 23 functional requirements, 21 must-haves and 2 should-haves, delivered a
 | FR-8 | The suggestion card shows poster, year, runtime, category and note, with "Another" and "We're watching this" buttons. | Must | M4 |
 | FR-9 | "We're watching this" marks the film watched and posts it as tonight's pick. | Must | M4 |
 | FR-10 | `/suggest` can filter by category, genre and side (hate-watch or actually good). | Should | M4 |
-| FR-11 | `/remove` deletes a film after a confirm button. Only the person who added it, or an admin, can. | Must | M5 |
-| FR-12 | `/edit` changes a film's note or category in a pop-up form, with the same permission as FR-11. | Must | M5 |
-| FR-13 | `/watched` marks a film watched, and `/unwatch` undoes it (admins only). | Must | M5 |
+| FR-11 | `/remove` deletes a film after a confirm button, and says publicly who removed it. Anyone in the server can. | Must | M5 |
+| FR-12 | `/edit` changes a film's note in a pop-up form, and its category with an option. Anyone in the server can. | Must | M5 |
+| FR-13 | `/watched` marks a film watched, and `/unwatch` undoes it. Anyone in the server can. | Must | M5 |
 | FR-14 | `/export` sends the whole list as a JSON file (admins only). | Must | M6 |
 | FR-15 | A one-time import loads `watchlist_seed.json`. Running it twice changes nothing. Film notes go into `why_watch` (FR-20), because an AI wrote them. | Must | M6 |
 | FR-16 | A weekly task backs up the database to a private admin channel. | Must | M6 |
@@ -299,9 +299,9 @@ Users work the bot through twelve slash commands and four kinds of button. "Priv
 | `/suggest` | `category`, `genre`, `side` (all optional) | Everyone | Public | Picks a film and posts its card, with Another and We're watching this buttons. |
 | `/watched` | `film` (search unwatched films) | Everyone | Public | Marks the film watched. |
 | `/verdict` | `film` (search the list), `verdict` (Liked, Mixed or Didn't like), `comment` (optional, up to 500 characters) | Everyone | Public | Saves your verdict on the film, replacing any earlier one. Marks the film watched if it wasn't. |
-| `/remove` | `film` (search the list) | The person who added it, or an admin | Private | Asks to confirm, then deletes the film. |
-| `/edit` | `film` (search the list), `category` (optional) | The person who added it, or an admin | Private | Opens a pop-up form with the note filled in, then saves the note and category. |
-| `/unwatch` | `film` (search watched films) | Admins | Private | Undoes `/watched`. |
+| `/remove` | `film` (search the list) | Everyone | Private | Asks to confirm, then deletes the film and posts publicly who removed it. |
+| `/edit` | `film` (search the list), `category` (optional) | Everyone | Private | Opens a pop-up form with the note filled in, then saves the note and category. |
+| `/unwatch` | `film` (search watched films) | Everyone | Private | Undoes `/watched`. |
 | `/export` | none | Admins | Private | Sends the whole list as a JSON file. |
 | `/import` | `file` (a JSON attachment, up to 2 MB) | Admins | Private | Shows what the file would change, then applies it after Confirm. |
 | `/ping` | none | Everyone | Private | Replies with the bot's latency in milliseconds. |
@@ -356,10 +356,10 @@ These rules live in the service layer and each one gets a unit test. The suggest
 
 | Action | Who |
 | --- | --- |
-| Add, list, suggest, mark watched, leave a verdict | Everyone in the server |
-| Edit or remove a film | The person in `added_by`, or an admin |
-| Edit or remove a seed or AI film (`added_by` is NULL) | Admins |
-| Unwatch, export, import | Admins |
+| Add, list, suggest, mark watched or unwatched, edit, remove, leave a verdict | Everyone in the server |
+| Export, import | Admins |
+
+Anyone can change any film because the bot serves one friends' server. `/remove` still asks to confirm, and it posts publicly who removed what, so nothing disappears silently.
 
 **Seed import (FR-15)**
 
@@ -499,13 +499,12 @@ Done when: typing "Herop" offers "Heropanti (2014)", the card shows its poster, 
 
 Done when: a card's buttons still work after the bot restarts, and with 20 or more unwatched films, 20 clicks of Another never repeat a film within 10 clicks.
 
-**M5 · Editing and permissions (FR-11 to FR-13)**
+**M5 · Editing (FR-11 to FR-13)**
 
-- [ ] `/remove` with a confirm dialog, `/edit` with a pop-up form, and `/watched` and `/unwatch`.
-- [ ] Permission checks in the service, tested for the film's adder, an admin and another member.
+- [ ] `/remove` with a confirm dialog and a public note of who removed what, `/edit` with a pop-up form, and `/watched` and `/unwatch`.
 - [ ] Autocomplete on every `film` option, searching the list.
 
-Done when: a second account can't edit or remove your films, and an admin can.
+Done when: anyone can remove a film after confirming, while Cancel keeps it; edit its note in the pop-up and move it to another category; and mark it watched or unwatched.
 
 **M6 · Data safety and the seed (FR-14 to FR-17)**
 
@@ -558,7 +557,6 @@ Most tests target the service layer, with no network and no Discord, and CI runs
 - `test_suggest_respects_filters`
 - `test_add_rejects_duplicate_tmdb_id` and `test_add_rejects_duplicate_title_and_year`
 - `test_add_warns_on_blocklisted_film`
-- `test_only_adder_or_admin_can_remove`
 - `test_seed_import_is_idempotent`
 - `test_migrations_apply_in_order`
 

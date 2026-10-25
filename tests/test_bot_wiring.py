@@ -47,9 +47,13 @@ def test_slash_commands_are_registered_on_movie_tree(bot: MovieBot) -> None:
     assert sorted(command.name for command in bot.tree.get_commands()) == [
         "about",
         "add",
+        "edit",
         "list",
         "ping",
+        "remove",
         "suggest",
+        "unwatch",
+        "watched",
     ]
 
 

@@ -6,7 +6,9 @@ import aiosqlite
 import pytest
 
 from moviebot.db.categories import CategoryRepository
+from moviebot.db.database import Database
 from moviebot.db.films import FilmRepository
+from moviebot.db.suggestions import SuggestionRepository
 from moviebot.models import Category, NewFilm
 
 WATCHED_AT = "2026-10-20T10:00:00Z"
@@ -135,3 +137,49 @@ async def test_unwatched_filters_by_category_and_genre(
     assert await films.unwatched(category_key="launch") == [masala]
     assert await films.unwatched(genre="drama") == [drama]
     assert (masala.side, masala.genre) == ("bad", "masala")
+
+
+async def test_list_all_sorts_by_title_and_filters_by_watched(films: FilmRepository) -> None:
+    unwatched = await films.add(NewFilm(slug="b-2001", title="b film", year=2001))
+    watched = await films.add(
+        NewFilm(slug="a-2000", title="A film", year=2000, watched_at=WATCHED_AT)
+    )
+
+    assert await films.list_all() == [watched, unwatched]
+    assert await films.list_all(watched=True) == [watched]
+    assert await films.list_all(watched=False) == [unwatched]
+
+
+async def test_update_sets_the_note_and_category(films: FilmRepository, launch: Category) -> None:
+    film = await films.add(NewFilm(slug="heropanti-2014", title="Heropanti", year=2014))
+
+    updated = await films.update(film.id, note="Tiger's debut", category_key="launch")
+
+    assert updated is not None
+    assert (updated.note, updated.category_key) == ("Tiger's debut", "launch")
+    assert await films.update(9999, note=None, category_key=None) is None
+
+
+async def test_watched_and_unwatched_change_only_the_right_films(films: FilmRepository) -> None:
+    film = await films.add(NewFilm(slug="heropanti-2014", title="Heropanti", year=2014))
+
+    assert await films.mark_unwatched(film.id) is None  # not watched yet
+    watched = await films.mark_watched(film.id, WATCHED_AT)
+    assert watched is not None
+    assert watched.watched_at == WATCHED_AT
+    assert await films.mark_watched(film.id, "2026-10-25T20:00:00Z") is None  # already watched
+    unwatched = await films.mark_unwatched(film.id)
+    assert unwatched is not None
+    assert unwatched.watched_at is None
+
+
+async def test_removing_a_film_removes_its_suggestion_history(
+    db: Database, films: FilmRepository, suggestions: SuggestionRepository
+) -> None:
+    film = await films.add(NewFilm(slug="heropanti-2014", title="Heropanti", year=2014))
+    await suggestions.add(film.id, requested_by=1)
+
+    await films.delete(film.id)
+
+    rows = await db.conn.execute_fetchall("SELECT count(*) FROM suggestions")
+    assert list(rows)[0][0] == 0

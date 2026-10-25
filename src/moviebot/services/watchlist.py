@@ -10,16 +10,23 @@ from moviebot.db.categories import CategoryRepository
 from moviebot.db.films import FilmRepository
 from moviebot.models import (
     AddedFilm,
+    AlreadyWatched,
+    AmbiguousFilm,
     Category,
     DuplicateFilm,
+    Film,
+    FilmInfo,
+    FilmNotFound,
     FilmPage,
     InvalidFilm,
     NewFilm,
+    NotWatched,
     Show,
     TmdbMovie,
     TmdbResult,
     TmdbUnavailable,
     UnknownCategory,
+    UnknownFilm,
 )
 from moviebot.tmdb.client import TmdbApi, TmdbError
 
@@ -175,6 +182,86 @@ class WatchlistService:
     async def list_categories(self) -> list[Category]:
         """Every category, in display order."""
         return await self._categories.list_all()
+
+    async def category(self, key: str | None) -> Category | None:
+        """The category with this key, or None for no key. Raises UnknownCategory."""
+        return await self._category(key)
+
+    async def search_films(
+        self, text: str, *, watched: bool | None = None, limit: int = 25
+    ) -> list[Film]:
+        """Films whose title contains the text, ignoring case and punctuation, sorted by title.
+
+        This feeds the film options' suggestions: watched=False for unwatched films only, True
+        for watched ones. The list is a few hundred films, so the matching happens here.
+        """
+        wanted = _plain(text)
+        films = await self._films.list_all(watched=watched)
+        return [film for film in films if wanted in _plain(film.title)][:limit]
+
+    async def get_film(self, film_id: int) -> Film:
+        """The film with this id. Raises FilmNotFound."""
+        film = await self._films.get(film_id)
+        if film is None:
+            raise FilmNotFound
+        return film
+
+    async def film_named(self, title: str, *, watched: bool | None = None) -> Film:
+        """The one film with this title, ignoring case and punctuation, for a name typed in full.
+
+        Looks among the watched or unwatched films first, if asked to, and then among all films.
+        Raises UnknownFilm when no film has the title, and AmbiguousFilm when several do.
+        """
+        films = await self._films.list_all(watched=watched)
+        matches = [film for film in films if titles_match(title, film.title)]
+        if not matches and watched is not None:
+            everything = await self._films.list_all()
+            matches = [film for film in everything if titles_match(title, film.title)]
+        if not matches:
+            raise UnknownFilm(title.strip())
+        if len(matches) > 1:
+            raise AmbiguousFilm(title.strip())
+        return matches[0]
+
+    async def remove_film(self, film_id: int) -> Film:
+        """Delete a film, with its suggestion history (FR-11). Returns the film that was removed."""
+        film = await self.get_film(film_id)
+        if not await self._films.delete(film_id):
+            raise FilmNotFound
+        return film
+
+    async def edit_film(
+        self, film_id: int, *, note: str | None, category_key: str | None = None
+    ) -> FilmInfo:
+        """Set a film's note, and its category if one is given (FR-12). An empty note clears it.
+
+        Raises FilmNotFound, InvalidFilm or UnknownCategory.
+        """
+        note = _clean_note(note)
+        film = await self.get_film(film_id)
+        category = await self._category(category_key or film.category_key)
+        updated = await self._films.update(
+            film_id, note=note, category_key=category.key if category else None
+        )
+        if updated is None:
+            raise FilmNotFound
+        return FilmInfo(film=updated, category=category)
+
+    async def mark_watched(self, film_id: int) -> Film:
+        """/watched (FR-13): mark the film watched now. Raises FilmNotFound or AlreadyWatched."""
+        film = await self.get_film(film_id)
+        watched = await self._films.mark_watched(film_id, self._timestamp())
+        if watched is None:
+            raise AlreadyWatched(film)
+        return watched
+
+    async def unwatch(self, film_id: int) -> Film:
+        """/unwatch (FR-13): back on the unwatched list. Raises FilmNotFound or NotWatched."""
+        film = await self.get_film(film_id)
+        unwatched = await self._films.mark_unwatched(film_id)
+        if unwatched is None:
+            raise NotWatched(film)
+        return unwatched
 
     async def _match_on_tmdb(self, title: str, year: int | None) -> TmdbMovie | None:
         """The one TMDB film with this title, and a year within 1 of the given year if any.

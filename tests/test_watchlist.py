@@ -9,14 +9,19 @@ from fakes import FakeTmdbClient
 from moviebot.db.categories import CategoryRepository
 from moviebot.db.films import FilmRepository
 from moviebot.models import (
+    AlreadyWatched,
+    AmbiguousFilm,
     Category,
     DuplicateFilm,
+    FilmNotFound,
     FilmPage,
     InvalidFilm,
     NewFilm,
+    NotWatched,
     TmdbMovie,
     TmdbUnavailable,
     UnknownCategory,
+    UnknownFilm,
 )
 from moviebot.services.watchlist import WatchlistService, make_slug, titles_match
 
@@ -332,3 +337,112 @@ async def test_search_tmdb_for_suggestions(
 
     tmdb.down = True
     assert await watchlist.search_tmdb("herop") == []
+
+
+async def test_search_films_ignores_case_and_punctuation(
+    watchlist: WatchlistService, films: FilmRepository
+) -> None:
+    await films.add(NewFilm(slug="ra-one-2011", title="Ra.One", year=2011))
+    await films.add(NewFilm(slug="raees-2017", title="Raees", year=2017, watched_at=WATCHED_AT))
+
+    assert [film.title for film in await watchlist.search_films("RA ONE")] == ["Ra.One"]
+    assert [film.title for film in await watchlist.search_films("ra")] == ["Ra.One", "Raees"]
+    assert [film.title for film in await watchlist.search_films("ra", watched=True)] == ["Raees"]
+    assert [film.title for film in await watchlist.search_films("ra", watched=False)] == ["Ra.One"]
+
+
+async def test_search_films_returns_at_most_25(
+    watchlist: WatchlistService, films: FilmRepository
+) -> None:
+    for number in range(30):
+        await films.add(NewFilm(slug=f"film-{number}", title=f"Film {number:02}", year=2000))
+
+    assert len(await watchlist.search_films("")) == 25
+
+
+async def test_a_typed_film_name_must_match_exactly_one_film(
+    watchlist: WatchlistService, films: FilmRepository
+) -> None:
+    await films.add(NewFilm(slug="don-1978", title="Don", year=1978))
+    await films.add(NewFilm(slug="don-2006", title="Don", year=2006, watched_at=WATCHED_AT))
+    await films.add(NewFilm(slug="ra-one-2011", title="Ra.One", year=2011))
+
+    assert (await watchlist.film_named("ra one")).slug == "ra-one-2011"
+    assert (await watchlist.film_named("don", watched=False)).year == 1978  # the unwatched Don
+    with pytest.raises(AmbiguousFilm, match="Several films are called"):
+        await watchlist.film_named("Don")
+    with pytest.raises(UnknownFilm, match='no film called "Dhoom"'):
+        await watchlist.film_named(" Dhoom ")
+
+
+async def test_a_typed_name_outside_the_filter_still_finds_the_film(
+    watchlist: WatchlistService, films: FilmRepository
+) -> None:
+    seen = await films.add(
+        NewFilm(slug="seen-2000", title="Seen", year=2000, watched_at=WATCHED_AT)
+    )
+
+    # /watched looks among unwatched films first, then says this one is already watched.
+    assert await watchlist.film_named("seen", watched=False) == seen
+
+
+async def test_remove_film_deletes_it(watchlist: WatchlistService, films: FilmRepository) -> None:
+    added = await watchlist.add_film(title="Heropanti", year=2014)
+
+    removed = await watchlist.remove_film(added.film.id)
+
+    assert removed.title == "Heropanti"
+    assert await films.get(added.film.id) is None
+    with pytest.raises(FilmNotFound):
+        await watchlist.remove_film(added.film.id)
+
+
+async def test_edit_film_changes_the_note_and_category(
+    watchlist: WatchlistService, launch: Category
+) -> None:
+    added = await watchlist.add_film(title="Heropanti", year=2014, note="Old note")
+
+    edited = await watchlist.edit_film(
+        added.film.id, note="  Tiger's debut ", category_key="launch"
+    )
+    kept = await watchlist.edit_film(added.film.id, note="")  # empty clears it; category is kept
+
+    assert (edited.film.note, edited.film.category_key, edited.category) == (
+        "Tiger's debut",
+        "launch",
+        launch,
+    )
+    assert (kept.film.note, kept.film.category_key, kept.category) == (None, "launch", launch)
+
+
+async def test_edit_film_refuses_bad_input(watchlist: WatchlistService) -> None:
+    added = await watchlist.add_film(title="Heropanti", year=2014)
+
+    with pytest.raises(UnknownCategory):
+        await watchlist.edit_film(added.film.id, note=None, category_key="nope")
+    with pytest.raises(InvalidFilm, match="at most 500"):
+        await watchlist.edit_film(added.film.id, note="x" * 501)
+    with pytest.raises(FilmNotFound):
+        await watchlist.edit_film(9999, note=None)
+
+
+async def test_mark_watched_and_unwatch(watchlist: WatchlistService) -> None:
+    added = await watchlist.add_film(title="Heropanti", year=2014)
+
+    with pytest.raises(NotWatched, match="isn't marked as watched"):
+        await watchlist.unwatch(added.film.id)
+    watched = await watchlist.mark_watched(added.film.id)
+    assert watched.watched_at == "2026-10-21T18:00:00Z"
+    with pytest.raises(AlreadyWatched):
+        await watchlist.mark_watched(added.film.id)
+    unwatched = await watchlist.unwatch(added.film.id)
+    assert unwatched.watched_at is None
+    with pytest.raises(FilmNotFound):
+        await watchlist.mark_watched(9999)
+
+
+async def test_category_lookup(watchlist: WatchlistService, launch: Category) -> None:
+    assert await watchlist.category("launch") == launch
+    assert await watchlist.category(None) is None
+    with pytest.raises(UnknownCategory):
+        await watchlist.category("nope")

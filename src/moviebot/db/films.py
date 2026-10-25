@@ -139,6 +139,48 @@ class FilmRepository:
         )
         return [_film(row) for row in rows]
 
+    async def list_all(self, *, watched: bool | None = None) -> list[Film]:
+        """Every film, or only the watched or unwatched ones, sorted by title, then year."""
+        rows = await self._db.conn.execute_fetchall(
+            """
+            SELECT * FROM films
+            WHERE ? IS NULL OR (watched_at IS NOT NULL) = ?
+            ORDER BY lower(title), year, id
+            """,
+            (watched, watched),
+        )
+        return [_film(row) for row in rows]
+
+    async def update(
+        self, film_id: int, *, note: str | None, category_key: str | None
+    ) -> Film | None:
+        """Set a film's note and category. Returns the film, or None if there's no such film."""
+        async with self._db.transaction() as conn:
+            rows = await conn.execute_fetchall(
+                "UPDATE films SET note = ?, category_key = ? WHERE id = ? RETURNING *",
+                (note, category_key, film_id),
+            )
+        return _first(rows)
+
+    async def mark_watched(self, film_id: int, watched_at: str) -> Film | None:
+        """Mark an unwatched film watched. None if the film is missing or already watched."""
+        async with self._db.transaction() as conn:
+            rows = await conn.execute_fetchall(
+                "UPDATE films SET watched_at = ? WHERE id = ? AND watched_at IS NULL RETURNING *",
+                (watched_at, film_id),
+            )
+        return _first(rows)
+
+    async def mark_unwatched(self, film_id: int) -> Film | None:
+        """Mark a watched film unwatched again. None if the film is missing or isn't watched."""
+        async with self._db.transaction() as conn:
+            rows = await conn.execute_fetchall(
+                "UPDATE films SET watched_at = NULL WHERE id = ? AND watched_at IS NOT NULL "
+                "RETURNING *",
+                (film_id,),
+            )
+        return _first(rows)
+
     async def delete(self, film_id: int) -> bool:
         """Delete a film. Returns whether there was one to delete."""
         async with self._db.transaction() as conn:

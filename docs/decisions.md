@@ -34,3 +34,8 @@ One dated line per design decision, newest last. When a decision changes, update
 - 2026-10-25: /list's expiring view holds a plain button with the Suggest custom_id. In discord.py 2.7, a DynamicItem inside an expiring view is unregistered for every message when that view stops.
 - 2026-10-25: "We're watching this" marks the film watched and its suggestion chosen in one transaction, in SuggestionRepository.choose.
 - 2026-10-25: The Suggest and Another buttons share a per-person cooldown of one click every 3 seconds, like /suggest.
+- 2026-10-25: Anyone in the server can remove, edit, mark watched and unwatch any film, because the bot serves one friends' server. /remove still asks to confirm and posts publicly who removed what. /export and /import stay admin-only.
+- 2026-10-25: The film options of /remove, /edit, /watched and /unwatch suggest films from the list with the value "film:<id>". A name typed without picking must match exactly one title, so the bot never guesses which film was meant.
+- 2026-10-25: Searching the list for those options happens in Python, ignoring case and punctuation, because the list is small.
+- 2026-10-25: /edit takes the category as an option, with the same suggestions as /add and /list, and the note in the pop-up form.
+- 2026-10-25: Confirm and Cancel expire after 10 minutes and the /edit pop-up after 15, so questions nobody answers don't linger. If someone else removed the film first, Confirm says so.
