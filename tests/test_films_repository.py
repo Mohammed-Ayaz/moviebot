@@ -120,3 +120,18 @@ async def test_add_stores_tmdb_details_and_finds_by_tmdb_id(films: FilmRepositor
     assert film.tmdb_synced_at == "2026-10-21T18:00:00Z"
     assert await films.get_by_tmdb_id(101) == film
     assert await films.get_by_tmdb_id(999) is None
+
+
+async def test_unwatched_filters_by_category_and_genre(
+    films: FilmRepository, launch: Category
+) -> None:
+    masala = await films.add(
+        NewFilm(slug="a", title="A", year=2000, category_key="launch", genre="masala", side="bad")
+    )
+    drama = await films.add(NewFilm(slug="b", title="B", year=2000, genre="drama"))
+    await films.add(NewFilm(slug="c", title="C", year=2000, genre="masala", watched_at=WATCHED_AT))
+
+    assert await films.unwatched() == [masala, drama]
+    assert await films.unwatched(category_key="launch") == [masala]
+    assert await films.unwatched(genre="drama") == [drama]
+    assert (masala.side, masala.genre) == ("bad", "masala")

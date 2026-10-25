@@ -8,7 +8,9 @@ import pytest
 
 from moviebot.bot import MovieBot, MovieTree
 from moviebot.config import Settings
+from moviebot.services.picker import PickerService
 from moviebot.services.watchlist import WatchlistService
+from moviebot.ui.views import ListView
 
 SETTINGS = Settings.from_env(
     {"DISCORD_TOKEN": "discord-test-token", "TMDB_READ_TOKEN": "tmdb-test-token", "GUILD_ID": "1"}
@@ -16,9 +18,9 @@ SETTINGS = Settings.from_env(
 
 
 @pytest.fixture
-async def bot(watchlist: WatchlistService) -> AsyncIterator[MovieBot]:
+async def bot(watchlist: WatchlistService, picker: PickerService) -> AsyncIterator[MovieBot]:
     """A bot that has run setup_hook, as it does at startup, but never connects."""
-    async with MovieBot(SETTINGS, watchlist=watchlist) as movie_bot:
+    async with MovieBot(SETTINGS, watchlist=watchlist, picker=picker) as movie_bot:
         await movie_bot.setup_hook()
         yield movie_bot
 
@@ -47,15 +49,28 @@ def test_slash_commands_are_registered_on_movie_tree(bot: MovieBot) -> None:
         "add",
         "list",
         "ping",
+        "suggest",
     ]
 
 
 async def test_startup_never_syncs(
-    monkeypatch: pytest.MonkeyPatch, watchlist: WatchlistService
+    monkeypatch: pytest.MonkeyPatch, watchlist: WatchlistService, picker: PickerService
 ) -> None:
-    async with MovieBot(SETTINGS, watchlist=watchlist) as movie_bot:
+    async with MovieBot(SETTINGS, watchlist=watchlist, picker=picker) as movie_bot:
         sync = AsyncMock()
         monkeypatch.setattr(movie_bot.tree, "sync", sync)
         await movie_bot.setup_hook()
         await movie_bot.on_ready()
     sync.assert_not_awaited()
+
+
+async def test_list_buttons_expiring_leaves_the_suggest_button_working(
+    bot: MovieBot, watchlist: WatchlistService
+) -> None:
+    """discord.py forgets a persistent button if an expiring view holding one stops."""
+    view = ListView(watchlist, await watchlist.list_films())
+    bot._connection.store_view(view, 123)  # what sending the /list message does
+    view.stop()  # what the 10-minute timeout does
+
+    patterns = {pattern.pattern for pattern in bot._connection._view_store._dynamic_items}
+    assert "mb:suggest" in patterns

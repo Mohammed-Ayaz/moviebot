@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import random
 import sys
 from datetime import UTC, datetime
 from functools import partial
@@ -14,6 +15,8 @@ from moviebot.config import ConfigError, Settings, load_settings
 from moviebot.db.categories import CategoryRepository
 from moviebot.db.database import open_database
 from moviebot.db.films import FilmRepository
+from moviebot.db.suggestions import SuggestionRepository
+from moviebot.services.picker import PickerService
 from moviebot.services.watchlist import WatchlistService
 from moviebot.tmdb.client import TmdbClient
 
@@ -25,11 +28,16 @@ async def main(settings: Settings) -> None:
     db = await open_database(settings.database_path)
     try:
         async with aiohttp.ClientSession() as session:  # the one session for every TMDB call
+            films, categories = FilmRepository(db), CategoryRepository(db)
+            clock = partial(datetime.now, UTC)
             tmdb = TmdbClient(session, settings.tmdb_read_token)
-            watchlist = WatchlistService(
-                FilmRepository(db), CategoryRepository(db), tmdb, clock=partial(datetime.now, UTC)
+            watchlist = WatchlistService(films, categories, tmdb, clock=clock)
+            # Picking films needs no cryptographic randomness, hence the noqa for ruff's S311.
+            rng = random.Random()  # noqa: S311
+            picker = PickerService(
+                films, categories, SuggestionRepository(db), rng=rng, clock=clock
             )
-            async with MovieBot(settings, watchlist=watchlist) as bot:
+            async with MovieBot(settings, watchlist=watchlist, picker=picker) as bot:
                 await bot.start(settings.discord_token)
     finally:
         await db.close()

@@ -1,14 +1,15 @@
-"""Embeds: the film card, one page of /list, and /about."""
+"""Embeds: the film card, the suggestion card, one page of /list, and /about."""
 
 import discord
 
-from moviebot.models import Category, Film, FilmPage
+from moviebot.models import Category, Film, FilmPage, Suggestion
 
 LIST_TITLES = {"unwatched": "Unwatched films", "watched": "Watched films", "all": "All films"}
 EMPTY_LIST = "Nothing here yet. Add a film with /add."
 POSTER_URL = "https://image.tmdb.org/t/p/w500{path}"
 TMDB_NOTICE = "This product uses the TMDB API but is not endorsed or certified by TMDB."
 LOGO_FILENAME = "tmdb-logo.png"
+SIDE_LABELS = {"bad": "hate-watch", "good": "actually good"}
 
 
 def film_card(film: Film, category: Category | None) -> discord.Embed:
@@ -24,6 +25,20 @@ def film_card(film: Film, category: Category | None) -> discord.Embed:
         embed.set_image(url=POSTER_URL.format(path=film.poster_path))
     if film.tmdb_id is not None:
         embed.set_footer(text="Film data from TMDB")
+    return embed
+
+
+def suggestion_card(suggestion: Suggestion) -> discord.Embed:
+    """A suggestion (FR-8): the film card, headed with anything the pick was narrowed to."""
+    embed = film_card(suggestion.film, suggestion.category)
+    filters = suggestion.filters
+    narrowed = [
+        suggestion.category.name if filters.category_key and suggestion.category else None,
+        filters.genre,
+        SIDE_LABELS.get(filters.side) if filters.side else None,
+    ]
+    parts = [part for part in narrowed if part]
+    embed.set_author(name="Suggestion for tonight" + (f" · {', '.join(parts)}" if parts else ""))
     return embed
 
 

@@ -13,8 +13,9 @@ from discord.ext import commands
 
 from moviebot.models import AddedFilm, Show
 from moviebot.services.watchlist import MAX_NOTE, MAX_TITLE, MAX_YEAR, MIN_YEAR, WatchlistService
+from moviebot.ui.choices import category_choices
 from moviebot.ui.embeds import film_card, list_embed
-from moviebot.ui.views import ListView
+from moviebot.ui.views import ListView, suggest_view
 
 TMDB_PICK = re.compile(r"tmdb:(\d+)")  # the value of a suggestion picked from the list
 SUGGEST_SECONDS = 1.8  # Discord waits 3 seconds for suggestions; leave time to send them
@@ -88,7 +89,7 @@ class WatchlistCog(commands.Cog):
     async def add_category(
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
-        return await self._category_choices(current)
+        return category_choices(await self.watchlist.list_categories(), current)
 
     @app_commands.command(name="list", description="Show the watchlist, 10 films a page.")
     @app_commands.describe(
@@ -102,31 +103,24 @@ class WatchlistCog(commands.Cog):
         show: app_commands.Choice[str] | None = None,
         category: str | None = None,
     ) -> None:
-        """FR-3: post the first page, with Previous and Next when there's more than one."""
+        """FR-3: post the first page, with Suggest, plus Previous and Next if there are more."""
         page = await self.watchlist.list_films(
             show=cast(Show, show.value) if show else "unwatched", category_key=category
         )
-        if page.page_count == 1:
+        if page.page_count > 1:
+            view = ListView(self.watchlist, page)
+            await interaction.response.send_message(embed=list_embed(page), view=view)
+            view.message = await interaction.original_response()
+        elif page.total:
+            await interaction.response.send_message(embed=list_embed(page), view=suggest_view())
+        else:
             await interaction.response.send_message(embed=list_embed(page))
-            return
-        view = ListView(self.watchlist, page)
-        await interaction.response.send_message(embed=list_embed(page), view=view)
-        view.message = await interaction.original_response()
 
     @list_films.autocomplete("category")
     async def list_category(
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
-        return await self._category_choices(current)
-
-    async def _category_choices(self, current: str) -> list[app_commands.Choice[str]]:
-        """Up to 25 categories whose name or key contains what has been typed so far."""
-        typed = current.lower()
-        return [
-            app_commands.Choice(name=category.name, value=category.key)
-            for category in await self.watchlist.list_categories()
-            if typed in category.name.lower() or typed in category.key
-        ][:25]
+        return category_choices(await self.watchlist.list_categories(), current)
 
 
 def _confirmation(added: AddedFilm) -> str:

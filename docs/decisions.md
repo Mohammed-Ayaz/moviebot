@@ -27,3 +27,10 @@ One dated line per design decision, newest last. When a decision changes, update
 - 2026-10-21: The TMDB client gives up instead of waiting when Retry-After asks for more than 5 seconds.
 - 2026-10-21: The TMDB logo ships inside the package, in src/moviebot/assets/, and /about attaches it as a small thumbnail.
 - 2026-10-21: Test doubles live in tests/fakes.py, and conftest.py hands them to tests as fixtures.
+- 2026-10-25: Another's custom_id carries the /suggest filters (mb:another:<film_id>:<category>:<genre>:<side>), so Another keeps them.
+- 2026-10-25: For the side filter, a film's side is its own or else its category's, and side "both" counts for either.
+- 2026-10-25: When the last-10 rule leaves nothing, Another still leaves out the film on the card, unless it's the only one.
+- 2026-10-25: The persistent buttons catch their own errors and reply through ui/errors.py, because discord.py only logs errors from DynamicItems.
+- 2026-10-25: /list's expiring view holds a plain button with the Suggest custom_id. In discord.py 2.7, a DynamicItem inside an expiring view is unregistered for every message when that view stops.
+- 2026-10-25: "We're watching this" marks the film watched and its suggestion chosen in one transaction, in SuggestionRepository.choose.
+- 2026-10-25: The Suggest and Another buttons share a per-person cooldown of one click every 3 seconds, like /suggest.

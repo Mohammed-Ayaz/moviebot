@@ -3,8 +3,8 @@
 from dataclasses import replace
 
 from moviebot.cogs.admin import TMDB_LOGO
-from moviebot.models import Film
-from moviebot.ui.embeds import TMDB_NOTICE, about_embed, film_card
+from moviebot.models import Category, Film, SuggestFilters, Suggestion
+from moviebot.ui.embeds import TMDB_NOTICE, about_embed, film_card, suggestion_card
 
 FILM = Film(
     id=1,
@@ -59,3 +59,15 @@ def test_film_card_without_tmdb_details_has_no_poster_or_credit() -> None:
 
 def test_the_tmdb_logo_that_about_attaches_is_a_png() -> None:
     assert TMDB_LOGO.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_suggestion_card_is_headed_with_what_the_pick_was_narrowed_to() -> None:
+    launch = Category(key="launch", name="The launch", position=1, side="bad")
+    filters = SuggestFilters(category_key="launch", genre="masala", side="bad")
+
+    plain = suggestion_card(Suggestion(film=FILM, category=None, filters=SuggestFilters()))
+    narrowed = suggestion_card(Suggestion(film=FILM, category=launch, filters=filters))
+
+    assert plain.author.name == "Suggestion for tonight"
+    assert narrowed.author.name == "Suggestion for tonight · The launch, masala, hate-watch"
+    assert narrowed.image.url == "https://image.tmdb.org/t/p/w500/heropanti.jpg"

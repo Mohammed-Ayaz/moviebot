@@ -24,9 +24,9 @@ class FilmRepository:
                 """
                 INSERT INTO films (
                     slug, tmdb_id, title, year, category_key, note, added_by, watched_at,
-                    poster_path, runtime_min, tmdb_synced_at
+                    poster_path, runtime_min, tmdb_synced_at, side, genre
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 RETURNING *
                 """,
                 (
@@ -41,6 +41,8 @@ class FilmRepository:
                     film.poster_path,
                     film.runtime_min,
                     film.tmdb_synced_at,
+                    film.side,
+                    film.genre,
                 ),
             )
         added = _first(rows)
@@ -118,6 +120,22 @@ class FilmRepository:
             LIMIT ? OFFSET ?
             """,
             (unwatched, watched, category_key, category_key, limit, offset),
+        )
+        return [_film(row) for row in rows]
+
+    async def unwatched(
+        self, *, category_key: str | None = None, genre: str | None = None
+    ) -> list[Film]:
+        """Every unwatched film, optionally only one category or genre, in the order added."""
+        rows = await self._db.conn.execute_fetchall(
+            """
+            SELECT * FROM films
+            WHERE watched_at IS NULL
+              AND (? IS NULL OR category_key = ?)
+              AND (? IS NULL OR genre = ?)
+            ORDER BY id
+            """,
+            (category_key, category_key, genre, genre),
         )
         return [_film(row) for row in rows]
 

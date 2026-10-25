@@ -78,6 +78,8 @@ class NewFilm:
     poster_path: str | None = None
     runtime_min: int | None = None
     tmdb_synced_at: str | None = None
+    side: str | None = None
+    genre: str | None = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,29 @@ class FilmPage:
     show: Show
     category: Category | None
     category_names: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SuggestFilters:
+    """What /suggest was narrowed to. Another keeps the same filters."""
+
+    category_key: str | None = None
+    genre: str | None = None
+    side: str | None = None  # "bad" for a hate-watch, "good" for actually good
+
+    @property
+    def active(self) -> bool:
+        """Whether any filter is set."""
+        return any((self.category_key, self.genre, self.side))
+
+
+@dataclass(frozen=True)
+class Suggestion:
+    """A film the picker chose, with what its card needs."""
+
+    film: Film
+    category: Category | None
+    filters: SuggestFilters
 
 
 class DomainError(Exception):
@@ -136,3 +161,29 @@ class TmdbUnavailable(DomainError):
             "TMDB isn't answering right now, so the film you picked can't be added. "
             "Try again in a minute, or type the title without picking a suggestion."
         )
+
+
+class NothingToSuggest(DomainError):
+    """No unwatched film is left to suggest (FR-7)."""
+
+    def __init__(self, *, filtered: bool) -> None:
+        super().__init__(
+            "No unwatched films match those filters."
+            if filtered
+            else "Nothing left to suggest. Add some films with /add."
+        )
+
+
+class FilmNotFound(DomainError):
+    """The film isn't on the list, for example because it was removed."""
+
+    def __init__(self) -> None:
+        super().__init__("That film isn't on the list any more.")
+
+
+class AlreadyWatched(DomainError):
+    """The film was already marked as watched."""
+
+    def __init__(self, film: Film) -> None:
+        super().__init__(f"{film.label} is already marked as watched.")
+        self.film = film

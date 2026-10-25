@@ -314,7 +314,7 @@ The bot owner also has one text command, `@MovieBot sync`, which registers the s
 | Button | `custom_id` | Survives a restart | What it does |
 | --- | --- | --- | --- |
 | Suggest | `mb:suggest` | Yes | Same as `/suggest` with no filters. |
-| Another | `mb:another:<film_id>` | Yes | Picks again, leaving out that film, and updates the card in place. |
+| Another | `mb:another:<film_id>`, plus `:<category>:<genre>:<side>` when `/suggest` had filters | Yes | Picks again with the same filters, leaving out that film, and updates the card in place. |
 | We're watching this | `mb:watch:<film_id>` | Yes | Marks the film watched, records the suggestion as chosen, disables the card's buttons and posts "Tonight: \<title>". |
 | Previous, Next, Confirm, Cancel | generated | No | Paging and confirm dialogs. They expire after 10 minutes, and only the person who ran the command can click Confirm or Cancel. |
 
@@ -325,7 +325,7 @@ The three persistent buttons are `discord.ui.DynamicItem` classes. Their `custom
 - Errors, confirmations and admin output are private. Lists, cards and tonight's pick are public.
 - A handler that calls TMDB, or might take more than a second, calls `interaction.response.defer()` first and answers with a follow-up.
 - Autocomplete can't be deferred, so it answers within 2 seconds, from the cache when possible. It returns at most 25 choices, each labelled "Title (Year)" in 100 characters or fewer.
-- `/add`, `/suggest` and Another have a cooldown of one use per 3 seconds per user.
+- `/add`, `/suggest`, the Suggest button and Another have a cooldown of one use per 3 seconds per user.
 - Admin commands use `app_commands.default_permissions(manage_guild=True)` to hide them, and the service checks permission again, because hidden isn't the same as secure.
 - A film card shows the poster, "Title (Year)", runtime, category, note, `why_watch` text and who added it, with "Film data from TMDB" in the footer.
 
@@ -335,9 +335,9 @@ These rules live in the service layer and each one gets a unit test. The suggest
 
 **Suggestion algorithm (FR-7, FR-10)**
 
-1. Start with every film where `watched_at` is NULL, narrowed by any filters given: category, genre, side.
+1. Start with every film where `watched_at` is NULL, narrowed by any filters given: category, genre, side. For the side filter, a film's side is its own, or its category's when it has none, and a film on side `both` counts for either side.
 2. Leave out films in the last 10 rows of `suggestions`, and the film being re-rolled away from when Another was clicked.
-3. If nothing is left, drop step 2 and try again. If there is still nothing, reply privately: "Nothing left to suggest. Add some films with /add."
+3. If nothing is left, drop the last-10 rule but still leave out the film being re-rolled away from, unless it is the only film left. If there is still nothing, reply privately: "Nothing left to suggest. Add some films with /add."
 4. Pick one candidate, uniformly at random, with the `random.Random` the service was given.
 5. Insert a `suggestions` row with `chosen = 0`. We're watching this later sets `chosen = 1` and the film's `watched_at` to now.
 

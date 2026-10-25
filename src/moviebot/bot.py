@@ -10,9 +10,12 @@ from discord import app_commands
 from discord.ext import commands
 
 from moviebot.cogs.admin import AdminCog
+from moviebot.cogs.suggest import SuggestCog
 from moviebot.cogs.watchlist import WatchlistCog
 from moviebot.config import Settings
+from moviebot.services.picker import PickerService
 from moviebot.services.watchlist import WatchlistService
+from moviebot.ui.buttons import AnotherButton, SuggestButton, WatchButton
 from moviebot.ui.errors import report_error
 
 log = logging.getLogger(__name__)
@@ -31,7 +34,9 @@ class MovieTree(app_commands.CommandTree):
 class MovieBot(commands.Bot):
     """Movie Night Bot: slash commands and buttons, plus the owner's `@MovieBot sync`."""
 
-    def __init__(self, settings: Settings, *, watchlist: WatchlistService) -> None:
+    def __init__(
+        self, settings: Settings, *, watchlist: WatchlistService, picker: PickerService
+    ) -> None:
         super().__init__(
             command_prefix=commands.when_mentioned,
             help_command=None,  # so `@MovieBot sync` stays the only text command
@@ -41,11 +46,14 @@ class MovieBot(commands.Bot):
         )
         self.settings = settings
         self.watchlist = watchlist
+        self.picker = picker  # the persistent buttons reach it through interaction.client
 
     async def setup_hook(self) -> None:
-        """Add the cogs. Never sync here: slash commands sync only on `@MovieBot sync`."""
+        """Add the cogs and the persistent buttons. Never sync here: only `@MovieBot sync` does."""
         await self.add_cog(AdminCog(self, guild_id=self.settings.guild_id))
         await self.add_cog(WatchlistCog(self.watchlist))
+        await self.add_cog(SuggestCog(self.picker, self.watchlist))
+        self.add_dynamic_items(SuggestButton, AnotherButton, WatchButton)
 
     async def on_ready(self) -> None:
         """Log the login, and warn if the bot isn't in the GUILD_ID server."""
