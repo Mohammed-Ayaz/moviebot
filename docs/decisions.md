@@ -20,3 +20,10 @@ One dated line per design decision, newest last. When a decision changes, update
 - 2026-10-21: Categories get their own small repository, db/categories.py, because /add and /list need them before the seed import exists.
 - 2026-10-21: Services raise DomainError subclasses with plain-text messages. ui/errors.py turns those, and cooldowns, into private replies for commands and buttons alike, so cogs need no try/except.
 - 2026-10-21: /add takes an optional year. From M3 it covers titles that aren't picked from TMDB.
+- 2026-10-21: TMDB suggestions carry "tmdb:<id>" as their value. Anything else in /add's title is a typed title.
+- 2026-10-21: A typed title is searched on TMDB once. Exactly one result with the same title, ignoring case and punctuation and within a year of any year given, is used as if picked; otherwise the film is saved as typed.
+- 2026-10-21: /add defers privately, confirms privately, then posts the card publicly as a second message, so errors after the defer stay private.
+- 2026-10-21: TMDB suggestions give up after 1.8 seconds, inside Discord's 3-second limit, and show nothing rather than an error.
+- 2026-10-21: The TMDB client gives up instead of waiting when Retry-After asks for more than 5 seconds.
+- 2026-10-21: The TMDB logo ships inside the package, in src/moviebot/assets/, and /about attaches it as a small thumbnail.
+- 2026-10-21: Test doubles live in tests/fakes.py, and conftest.py hands them to tests as fixtures.

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 Show = Literal["unwatched", "watched", "all"]
+TmdbResult = Literal["found", "not_found", "unavailable"]  # how TMDB went when adding a film
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,22 @@ class Film:
 
 
 @dataclass(frozen=True)
+class TmdbMovie:
+    """A film as TMDB describes it. Search results leave runtime_min empty; details fill it in."""
+
+    id: int
+    title: str
+    year: int | None
+    poster_path: str | None
+    runtime_min: int | None = None
+
+    @property
+    def label(self) -> str:
+        """'Title (Year)', or just the title when TMDB has no release date."""
+        return self.title if self.year is None else f"{self.title} ({self.year})"
+
+
+@dataclass(frozen=True)
 class NewFilm:
     """A film to insert. The database fills in its id and added_at."""
 
@@ -58,6 +75,9 @@ class NewFilm:
     note: str | None = None
     added_by: int | None = None
     watched_at: str | None = None
+    poster_path: str | None = None
+    runtime_min: int | None = None
+    tmdb_synced_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +87,7 @@ class AddedFilm:
     film: Film
     category: Category | None
     same_title: Film | None  # added without a year: a film with the same title already listed
+    tmdb: TmdbResult
 
 
 @dataclass(frozen=True)
@@ -105,3 +126,13 @@ class DuplicateFilm(DomainError):
     def __init__(self, existing: Film) -> None:
         super().__init__(f"{existing.label} is already on the list.")
         self.existing = existing
+
+
+class TmdbUnavailable(DomainError):
+    """TMDB didn't answer while adding a film picked from its suggestions."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "TMDB isn't answering right now, so the film you picked can't be added. "
+            "Try again in a minute, or type the title without picking a suggestion."
+        )

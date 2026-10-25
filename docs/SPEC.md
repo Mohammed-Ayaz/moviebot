@@ -345,6 +345,8 @@ These rules live in the service layer and each one gets a unit test. The suggest
 
 - The title is trimmed and must be 1 to 200 characters. A note may be up to 500, and a year, when given, is between 1888 and 2100.
 - When the user picks a TMDB result, the bot stores TMDB's title and year, plus `tmdb_id`, `poster_path` and `runtime_min`.
+- When the user types a title instead of picking a result, the bot searches TMDB once. If exactly one result has the same title, ignoring case and punctuation, and a year within 1 of any year given, it is used as if picked. Otherwise the film is saved as typed, without TMDB details, and the reply says so.
+- `/add` defers privately, replies privately with a confirmation and any warnings, then posts the film's card publicly.
 - It is a duplicate if the `tmdb_id` exists, or if the lower-cased title and the year match an existing film. The reply names the existing entry.
 - A film added without a year is never a duplicate, but if a film with the same title is already listed, the reply warns and names it.
 - The slug is the lower-cased title with every run of other characters turned into a hyphen, then the year: `heropanti-2014`. If it's taken, add `-2`, `-3` and so on.
@@ -398,7 +400,7 @@ The bot talks to two APIs: Discord, through discord.py's gateway connection, and
 **Client rules**
 
 - The bot shares one `aiohttp.ClientSession`, and every request has a 5-second total timeout.
-- On HTTP 429 or a 5xx error, it waits for `Retry-After` (or 1 second) and retries once. TMDB's soft limit is about 40 requests a second, far above what this bot needs.
+- On HTTP 429 or a 5xx error, it waits for `Retry-After` (or 1 second) and retries once. If TMDB asks for more than 5 seconds, it gives up instead. TMDB's soft limit is about 40 requests a second, far above what this bot needs.
 - If TMDB is down, `/add` still works: it saves the typed title without a poster and says so.
 - Search results are cached in memory for 10 minutes, keyed by the lower-cased query, up to 500 entries.
 - TMDB's terms allow cached data to be kept for up to six months. A monthly task re-fetches details for films whose `tmdb_synced_at` is more than five months old.

@@ -42,7 +42,12 @@ def test_sync_is_the_only_text_command(bot: MovieBot) -> None:
 
 def test_slash_commands_are_registered_on_movie_tree(bot: MovieBot) -> None:
     assert isinstance(bot.tree, MovieTree)
-    assert sorted(command.name for command in bot.tree.get_commands()) == ["add", "list", "ping"]
+    assert sorted(command.name for command in bot.tree.get_commands()) == [
+        "about",
+        "add",
+        "list",
+        "ping",
+    ]
 
 
 async def test_startup_never_syncs(

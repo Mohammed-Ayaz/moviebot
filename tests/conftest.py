@@ -1,14 +1,18 @@
 """Shared fixtures. Every test gets a fresh in-memory database built by the real migrations."""
 
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 import pytest
+from fakes import FakeTmdbClient
 
 from moviebot.db.categories import CategoryRepository
 from moviebot.db.database import Database, open_database
 from moviebot.db.films import FilmRepository
 from moviebot.models import Category
 from moviebot.services.watchlist import WatchlistService
+
+NOW = datetime(2026, 10, 21, 18, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -43,5 +47,13 @@ async def launch(categories: CategoryRepository) -> Category:
 
 
 @pytest.fixture
-def watchlist(films: FilmRepository, categories: CategoryRepository) -> WatchlistService:
-    return WatchlistService(films, categories)
+def tmdb() -> FakeTmdbClient:
+    """A fake TMDB that knows no films until a test adds some."""
+    return FakeTmdbClient()
+
+
+@pytest.fixture
+def watchlist(
+    films: FilmRepository, categories: CategoryRepository, tmdb: FakeTmdbClient
+) -> WatchlistService:
+    return WatchlistService(films, categories, tmdb, clock=lambda: NOW)

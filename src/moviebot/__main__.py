@@ -3,7 +3,10 @@
 import asyncio
 import logging
 import sys
+from datetime import UTC, datetime
+from functools import partial
 
+import aiohttp
 import discord
 
 from moviebot.bot import MovieBot
@@ -12,6 +15,7 @@ from moviebot.db.categories import CategoryRepository
 from moviebot.db.database import open_database
 from moviebot.db.films import FilmRepository
 from moviebot.services.watchlist import WatchlistService
+from moviebot.tmdb.client import TmdbClient
 
 log = logging.getLogger(__name__)
 
@@ -20,9 +24,13 @@ async def main(settings: Settings) -> None:
     """Open the database, build the services, and run the bot until it stops."""
     db = await open_database(settings.database_path)
     try:
-        watchlist = WatchlistService(FilmRepository(db), CategoryRepository(db))
-        async with MovieBot(settings, watchlist=watchlist) as bot:
-            await bot.start(settings.discord_token)
+        async with aiohttp.ClientSession() as session:  # the one session for every TMDB call
+            tmdb = TmdbClient(session, settings.tmdb_read_token)
+            watchlist = WatchlistService(
+                FilmRepository(db), CategoryRepository(db), tmdb, clock=partial(datetime.now, UTC)
+            )
+            async with MovieBot(settings, watchlist=watchlist) as bot:
+                await bot.start(settings.discord_token)
     finally:
         await db.close()
 

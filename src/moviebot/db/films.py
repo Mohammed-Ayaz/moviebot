@@ -22,9 +22,11 @@ class FilmRepository:
         async with self._db.transaction() as conn:
             rows = await conn.execute_fetchall(
                 """
-                INSERT INTO films
-                    (slug, tmdb_id, title, year, category_key, note, added_by, watched_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO films (
+                    slug, tmdb_id, title, year, category_key, note, added_by, watched_at,
+                    poster_path, runtime_min, tmdb_synced_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 RETURNING *
                 """,
                 (
@@ -36,6 +38,9 @@ class FilmRepository:
                     film.note,
                     film.added_by,
                     film.watched_at,
+                    film.poster_path,
+                    film.runtime_min,
+                    film.tmdb_synced_at,
                 ),
             )
         added = _first(rows)
@@ -46,6 +51,13 @@ class FilmRepository:
     async def get(self, film_id: int) -> Film | None:
         """The film with this id, if there is one."""
         rows = await self._db.conn.execute_fetchall("SELECT * FROM films WHERE id = ?", (film_id,))
+        return _first(rows)
+
+    async def get_by_tmdb_id(self, tmdb_id: int) -> Film | None:
+        """The film with this TMDB id, if there is one."""
+        rows = await self._db.conn.execute_fetchall(
+            "SELECT * FROM films WHERE tmdb_id = ?", (tmdb_id,)
+        )
         return _first(rows)
 
     async def find_duplicate(

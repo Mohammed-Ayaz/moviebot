@@ -24,6 +24,7 @@ MODULES = [
     "moviebot.db.database",
     "moviebot.db.films",
     "moviebot.tmdb",
+    "moviebot.tmdb.client",
 ]
 
 

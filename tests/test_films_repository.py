@@ -101,3 +101,22 @@ async def test_category_add_leaves_an_existing_key_alone(
     assert await categories.get("launch") == launch
     assert await categories.get("nope") is None
     assert await categories.list_all() == [launch]
+
+
+async def test_add_stores_tmdb_details_and_finds_by_tmdb_id(films: FilmRepository) -> None:
+    film = await films.add(
+        NewFilm(
+            slug="heropanti-2014",
+            title="Heropanti",
+            year=2014,
+            tmdb_id=101,
+            poster_path="/heropanti.jpg",
+            runtime_min=146,
+            tmdb_synced_at="2026-10-21T18:00:00Z",
+        )
+    )
+
+    assert (film.poster_path, film.runtime_min) == ("/heropanti.jpg", 146)
+    assert film.tmdb_synced_at == "2026-10-21T18:00:00Z"
+    assert await films.get_by_tmdb_id(101) == film
+    assert await films.get_by_tmdb_id(999) is None

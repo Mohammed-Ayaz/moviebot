@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from fakes import FakeTmdbClient
 
 from moviebot.db.categories import CategoryRepository
 from moviebot.db.films import FilmRepository
@@ -13,12 +14,18 @@ from moviebot.models import (
     FilmPage,
     InvalidFilm,
     NewFilm,
+    TmdbMovie,
+    TmdbUnavailable,
     UnknownCategory,
 )
-from moviebot.services.watchlist import WatchlistService, make_slug
+from moviebot.services.watchlist import WatchlistService, make_slug, titles_match
 
 SEED_FILE = Path(__file__).parents[1] / "watchlist_seed.json"
 WATCHED_AT = "2026-10-20T10:00:00Z"
+HEROPANTI = TmdbMovie(101, "Heropanti", 2014, poster_path="/heropanti.jpg", runtime_min=146)
+HEROPANTI_2 = TmdbMovie(102, "Heropanti 2", 2022, poster_path="/heropanti-2.jpg", runtime_min=147)
+DON_1978 = TmdbMovie(201, "Don", 1978, poster_path="/don-1978.jpg", runtime_min=175)
+DON_2006 = TmdbMovie(202, "Don", 2006, poster_path="/don-2006.jpg", runtime_min=171)
 
 
 def titles(page: FilmPage) -> list[str]:
@@ -55,11 +62,15 @@ async def test_add_rejects_duplicate_title_and_year(watchlist: WatchlistService)
     assert str(caught.value) == "Heropanti (2014) is already on the list."
 
 
-async def test_add_rejects_duplicate_tmdb_id(watchlist: WatchlistService) -> None:
-    await watchlist.add_film(title="Heropanti", year=2014, tmdb_id=280391)
+async def test_add_rejects_duplicate_tmdb_id(
+    watchlist: WatchlistService, tmdb: FakeTmdbClient
+) -> None:
+    tmdb.add(HEROPANTI)
+    await watchlist.add_from_tmdb(HEROPANTI.id)
+    tmdb.down = True  # the duplicate is found before TMDB is asked
 
     with pytest.raises(DuplicateFilm, match=r"Heropanti \(2014\)"):
-        await watchlist.add_film(title="Heropanti (Hindi)", year=2014, tmdb_id=280391)
+        await watchlist.add_from_tmdb(HEROPANTI.id)
 
 
 async def test_add_allows_the_same_title_in_another_year(watchlist: WatchlistService) -> None:
@@ -199,3 +210,125 @@ async def test_list_categories_in_display_order(
     await categories.add(noir)
 
     assert await watchlist.list_categories() == [launch, noir]
+
+
+async def test_add_from_tmdb_stores_tmdb_details(
+    watchlist: WatchlistService, tmdb: FakeTmdbClient
+) -> None:
+    tmdb.add(HEROPANTI)
+
+    added = await watchlist.add_from_tmdb(HEROPANTI.id, note="Tiger's debut", added_by=42)
+
+    film = added.film
+    assert (film.title, film.year, film.slug, film.tmdb_id) == (
+        "Heropanti",
+        2014,
+        "heropanti-2014",
+        101,
+    )
+    assert (film.poster_path, film.runtime_min) == ("/heropanti.jpg", 146)
+    assert film.tmdb_synced_at == "2026-10-21T18:00:00Z"
+    assert (film.note, film.added_by) == ("Tiger's debut", 42)
+    assert added.tmdb == "found"
+
+
+async def test_picked_film_already_typed_is_a_duplicate(
+    watchlist: WatchlistService, tmdb: FakeTmdbClient
+) -> None:
+    await watchlist.add_film(
+        title="Heropanti", year=2014
+    )  # TMDB knows no films yet: saved as typed
+    tmdb.add(HEROPANTI)
+
+    with pytest.raises(DuplicateFilm):
+        await watchlist.add_from_tmdb(HEROPANTI.id)
+
+
+async def test_picked_film_while_tmdb_is_down_is_refused(
+    watchlist: WatchlistService, tmdb: FakeTmdbClient
+) -> None:
+    tmdb.add(HEROPANTI)
+    tmdb.down = True
+
+    with pytest.raises(TmdbUnavailable):
+        await watchlist.add_from_tmdb(HEROPANTI.id)
+
+    assert (await watchlist.list_films()).total == 0
+
+
+async def test_typed_title_with_one_exact_match_is_used_as_if_picked(
+    watchlist: WatchlistService, tmdb: FakeTmdbClient
+) -> None:
+    tmdb.add(HEROPANTI, HEROPANTI_2)
+
+    added = await watchlist.add_film(title="heropanti")
+
+    assert (added.film.title, added.film.year, added.film.tmdb_id) == ("Heropanti", 2014, 101)
+    assert added.film.runtime_min == 146  # the details were fetched after the match
+    assert added.tmdb == "found"
+    assert added.same_title is None
+
+
+async def test_typed_title_with_several_matches_is_saved_as_typed(
+    watchlist: WatchlistService, tmdb: FakeTmdbClient
+) -> None:
+    tmdb.add(DON_1978, DON_2006)
+
+    added = await watchlist.add_film(title="Don")
+
+    assert (added.film.title, added.film.year, added.film.tmdb_id) == ("Don", None, None)
+    assert added.film.poster_path is None
+    assert added.tmdb == "not_found"
+
+
+async def test_a_typed_year_narrows_the_match_to_within_one_year(
+    watchlist: WatchlistService, tmdb: FakeTmdbClient
+) -> None:
+    tmdb.add(DON_1978, DON_2006)
+
+    added = await watchlist.add_film(title="don", year=2007)
+
+    assert (added.film.title, added.film.year, added.film.tmdb_id) == ("Don", 2006, 202)
+    assert added.tmdb == "found"
+
+
+async def test_typed_title_is_saved_without_a_poster_when_tmdb_is_down(
+    watchlist: WatchlistService, tmdb: FakeTmdbClient
+) -> None:
+    tmdb.add(HEROPANTI)
+    tmdb.down = True
+
+    added = await watchlist.add_film(title="Heropanti", year=2014)
+
+    assert (added.film.title, added.film.year, added.film.poster_path) == ("Heropanti", 2014, None)
+    assert added.tmdb == "unavailable"
+
+
+@pytest.mark.parametrize(
+    ("typed", "tmdb_title", "expected"),
+    [
+        ("ra one", "Ra.One", True),
+        ("HEROPANTI", "Heropanti", True),
+        ("Kabhi Khushi Kabhie Gham", "Kabhi Khushi Kabhie Gham...", True),
+        ("Heropanti", "Heropanti 2", False),
+        ("!!!", "???", False),
+    ],
+)
+def test_titles_match_ignoring_case_and_punctuation(
+    typed: str, tmdb_title: str, expected: bool
+) -> None:
+    assert titles_match(typed, tmdb_title) is expected
+
+
+async def test_search_tmdb_for_suggestions(
+    watchlist: WatchlistService, tmdb: FakeTmdbClient
+) -> None:
+    tmdb.add(HEROPANTI, HEROPANTI_2)
+
+    assert await watchlist.search_tmdb("h") == []  # too short to search
+    assert tmdb.searches == []
+    labels = [movie.label for movie in await watchlist.search_tmdb("herop")]
+    assert labels == ["Heropanti (2014)", "Heropanti 2 (2022)"]
+
+    tmdb.down = True
+    assert await watchlist.search_tmdb("herop") == []
