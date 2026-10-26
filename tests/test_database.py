@@ -9,7 +9,7 @@ from moviebot.db.database import Database, MigrationError, open_database, schema
 from moviebot.db.films import FilmRepository
 from moviebot.models import NewFilm
 
-TABLES = {"categories", "films", "suggestions", "verdicts", "blocklist"}
+TABLES = {"categories", "films", "suggestions", "verdicts", "blocklist", "backups"}
 
 
 def write_migrations(folder: Path, files: dict[str, str]) -> Path:
@@ -26,7 +26,7 @@ async def table_names(db: Database) -> set[str]:
 
 async def test_real_migrations_create_the_schema(db: Database) -> None:
     assert TABLES <= await table_names(db)
-    assert await schema_version(db.conn) == 1
+    assert await schema_version(db.conn) == 2
 
 
 async def test_migrations_apply_in_order(tmp_path: Path) -> None:
@@ -54,7 +54,7 @@ async def test_migrations_run_only_once(tmp_path: Path) -> None:
     # 0001 creates tables, so running it a second time would fail with "table already exists".
     second = await open_database(path)
     try:
-        assert await schema_version(second.conn) == 1
+        assert await schema_version(second.conn) == 2
     finally:
         await second.close()
 

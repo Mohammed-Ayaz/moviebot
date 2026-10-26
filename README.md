@@ -10,6 +10,7 @@ Status: in development. The plan, requirements and milestones are in [docs/SPEC.
 2. Run `uv sync` to install Python 3.12 and the dependencies.
 3. Copy `.env.example` to `.env` and fill in your tokens. Never commit `.env`.
 4. Run `uv run python -m moviebot` (works from milestone M1).
+5. To load the starting list of films, stop the bot and run `uv run python scripts/import_seed.py watchlist_seed.json --match-tmdb`. Running it again changes nothing.
 
 ## Develop
 

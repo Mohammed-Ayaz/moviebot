@@ -57,6 +57,17 @@ def test_film_card_without_tmdb_details_has_no_poster_or_credit() -> None:
     assert [field.name for field in embed.fields] == ["Added by"]
 
 
+def test_film_card_shows_why_watch_first() -> None:
+    embed = film_card(replace(FILM, why_watch="Tiger's debut, built to launch him."), None)
+
+    first = embed.fields[0]
+    assert (first.name, first.value, first.inline) == (
+        "Why watch it",
+        "Tiger's debut, built to launch him.",
+        False,
+    )
+
+
 def test_the_tmdb_logo_that_about_attaches_is_a_png() -> None:
     assert TMDB_LOGO.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 

@@ -1,6 +1,6 @@
 # Movie Night Bot: Build Guide
 
-Last updated: 2026-10-21
+Last updated: 2026-10-25
 
 ## Overview
 
@@ -162,7 +162,8 @@ moviebot/
 │   ├── SPEC.md             this guide
 │   └── decisions.md        one line per design decision
 ├── migrations/
-│   └── 0001_init.sql
+│   ├── 0001_init.sql
+│   └── 0002_backups.sql
 ├── scripts/
 │   └── import_seed.py
 ├── src/moviebot/
@@ -180,13 +181,18 @@ moviebot/
 │   │   ├── modals.py       the edit form
 │   │   └── embeds.py       film and suggestion cards
 │   ├── services/
-│   │   ├── watchlist.py    add, edit, remove, watched
+│   │   ├── watchlist.py    add, edit, remove, watched, the TMDB refresh
 │   │   ├── picker.py       the suggestion algorithm
+│   │   ├── seed.py         the seed import that scripts/import_seed.py runs
 │   │   └── backup.py       export and backup files
 │   ├── db/
-│   │   ├── database.py     connect, pragmas, migrations
+│   │   ├── database.py     connect, pragmas, migrations, backup copies
 │   │   ├── films.py        FilmRepository
-│   │   └── suggestions.py  SuggestionRepository
+│   │   ├── categories.py   CategoryRepository
+│   │   ├── suggestions.py  SuggestionRepository
+│   │   ├── blocklist.py    BlocklistRepository: the do-not-watch list
+│   │   ├── verdicts.py     VerdictRepository
+│   │   └── backups.py      BackupRepository: when each backup was posted
 │   └── tmdb/
 │       └── client.py       search and details, with a cache
 └── tests/
@@ -200,12 +206,12 @@ moviebot/
 1. `python -m moviebot` runs `asyncio.run(main())` in `__main__.py`, which loads `Settings` from the environment and sets up logging.
 2. `main()` opens the database and applies any pending migrations.
 3. It builds the TMDB client and the services, creates the bot with them, and starts it.
-4. In `setup_hook`, the bot loads the cogs, registers its persistent buttons, and starts two background tasks: the weekly backup and the health check ping.
+4. In `setup_hook`, the bot loads the cogs, registers its persistent buttons, and starts its daily background tasks: the backup check, when `BACKUP_CHANNEL_ID` is set, and the TMDB refresh. M7 adds the health check ping.
 5. The bot connects to Discord. Slash commands are registered only when you send the owner-only `@MovieBot sync` message, never on every start.
 
 ## Data model
 
-Five SQLite tables hold everything: categories, films, suggestion history, verdicts and the do-not-watch list. Times are stored as ISO 8601 UTC text, and Discord IDs as integers, which SQLite stores at the 64 bits they need.
+Six SQLite tables hold everything: categories, films, suggestion history, verdicts, the do-not-watch list, and a log of the backups posted. Times are stored as ISO 8601 UTC text, and Discord IDs as integers, which SQLite stores at the 64 bits they need.
 
 ```sql
 -- migrations/0001_init.sql
@@ -271,6 +277,17 @@ CREATE TABLE blocklist (
 ```
 
 The unique index on title and year backs up FR-4. SQLite treats NULLs as distinct, so two films with the same title and no year are allowed; the service layer warns about those.
+
+```sql
+-- migrations/0002_backups.sql
+CREATE TABLE backups (
+    id         INTEGER PRIMARY KEY,
+    made_at    TEXT NOT NULL,                   -- when the copy was made, ISO 8601 UTC
+    size_bytes INTEGER NOT NULL
+);
+```
+
+`backups` gets one row for each weekly backup that reached the backup channel, so the bot knows when the next one is due (FR-16).
 
 **Pragmas, set on every connection**
 
@@ -350,7 +367,7 @@ These rules live in the service layer and each one gets a unit test. The suggest
 - It is a duplicate if the `tmdb_id` exists, or if the lower-cased title and the year match an existing film. The reply names the existing entry.
 - A film added without a year is never a duplicate, but if a film with the same title is already listed, the reply warns and names it.
 - The slug is the lower-cased title with every run of other characters turned into a hyphen, then the year: `heropanti-2014`. If it's taken, add `-2`, `-3` and so on.
-- If the title and year match the do-not-watch list, ignoring case, the bot shows the stored reason and adds the film only after Confirm.
+- If the film is on the do-not-watch list, the bot shows the stored reason privately and adds the film only after Confirm. Titles match ignoring case and punctuation, and the years must be equal unless the film or the entry has no year.
 
 **Who can change what (FR-11 to FR-13)**
 
@@ -363,12 +380,14 @@ Anyone can change any film because the bot serves one friends' server. `/remove`
 
 **Seed import (FR-15)**
 
-- Run `uv run python scripts/import_seed.py watchlist_seed.json`. It writes to the database at `DATABASE_PATH`.
+- Stop the bot, then run `uv run python scripts/import_seed.py watchlist_seed.json` from the repo folder. It writes to the database at `DATABASE_PATH`.
+- It checks the whole file first, and refuses a broken one with the entry and the problem.
 - It inserts categories by `key` and films by `slug`, and puts both the `do_not_watch` and `didnt_land` lists into `blocklist`, with each note as the reason.
 - A film marked `watched: true` gets `watched_at` set to the import time, and its note is stored as `why_watch`, because an AI wrote it.
-- Every insert uses `ON CONFLICT DO NOTHING`, so a second run changes nothing and never overwrites edits made since.
-- With `--match-tmdb`, it searches TMDB for each film by title and year. It accepts the first result whose year is within 1 and whose title matches when case and punctuation are ignored.
-- It prints the films it couldn't match. They still work, just without a poster. Fix them by listing `slug,tmdb_id` pairs in a CSV and running the script again with `--map fixes.csv`.
+- Every insert leaves existing rows alone, so a second run changes nothing and never overwrites edits made since. Categories and films use `ON CONFLICT DO NOTHING`, so a film already on the list, by slug, TMDB id, or title and year, is left out. The blocklist uses `WHERE NOT EXISTS`, because its unique constraint lets two NULL years through.
+- With `--match-tmdb`, it looks up each seed film that has no TMDB id yet. It searches by title and year, then by title alone, because TMDB's year can be one off, and accepts the first result whose year is within 1 and whose title matches when case and punctuation are ignored. It stores TMDB's id, poster and runtime, and keeps the seed's own title and year. A TMDB film that already belongs to another film on the list is skipped and reported.
+- It prints the films it couldn't match. They still work, just without a poster. Fix them by listing `slug,tmdb_id` pairs in a CSV file, one pair per line, and running the script again with `--map fixes.csv`. A semicolon or a tab works as the separator too.
+- If TMDB stops answering, matching stops, and running the script again carries on.
 
 ## External APIs
 
@@ -403,7 +422,7 @@ The bot talks to two APIs: Discord, through discord.py's gateway connection, and
 - On HTTP 429 or a 5xx error, it waits for `Retry-After` (or 1 second) and retries once. If TMDB asks for more than 5 seconds, it gives up instead. TMDB's soft limit is about 40 requests a second, far above what this bot needs.
 - If TMDB is down, `/add` still works: it saves the typed title without a poster and says so.
 - Search results are cached in memory for 10 minutes, keyed by the lower-cased query, up to 500 entries.
-- TMDB's terms allow cached data to be kept for up to six months. A monthly task re-fetches details for films whose `tmdb_synced_at` is more than five months old.
+- TMDB's terms allow cached data to be kept for up to six months. A daily task re-fetches the poster and runtime of films whose `tmdb_synced_at` is more than five months (150 days) old, up to 50 a day, oldest first. A film TMDB can't give is tried again the next day, and after 3 failures the task stops until then.
 
 **Attribution (NFR-8)**
 
@@ -419,7 +438,7 @@ All configuration comes from eight environment variables, loaded from a `.env` f
 | `TMDB_READ_TOKEN` | Yes | from TMDB settings | TMDB bearer token. |
 | `GUILD_ID` | Yes | `123456789012345678` | The one server the bot serves. Commands sync here. |
 | `ADMIN_ROLE_ID` | No | `234567890123456789` | A role counted as admin, besides Manage Server. |
-| `BACKUP_CHANNEL_ID` | From M6 | `345678901234567890` | The private channel that receives weekly backups. |
+| `BACKUP_CHANNEL_ID` | From M6 | `345678901234567890` | The private channel that receives weekly backups. Without it the bot still runs, and logs that backups are off. |
 | `HEALTHCHECK_URL` | From M7 | `https://hc-ping.com/<your-check-id>` | Pinged every 5 minutes. |
 | `DATABASE_PATH` | No | `data/moviebot.db` | Where the SQLite file lives. |
 | `LOG_LEVEL` | No | `INFO` | Use `DEBUG` while developing. |
@@ -508,11 +527,12 @@ Done when: anyone can remove a film after confirming, while Cancel keeps it; edi
 
 **M6 · Data safety and the seed (FR-14 to FR-17)**
 
-- [ ] `/export`, as JSON, for admins.
+- [ ] `/export`, as JSON in the Appendix format, for admins.
 - [ ] `scripts/import_seed.py`, with `--match-tmdb` and `--map`.
 - [ ] The do-not-watch warning on `/add`.
-- [ ] The weekly backup task: copy the database with SQLite's backup API in a worker thread, then post the copy to `BACKUP_CHANNEL_ID`.
-- [ ] The monthly TMDB refresh task.
+- [ ] `why_watch` on film and suggestion cards, moved up from M8 so the imported films show their notes.
+- [ ] The weekly backup: right after startup and then once a day, the bot checks whether a week has passed since the last backup. If so, it copies the database with SQLite's backup API in a worker thread and posts the copy to `BACKUP_CHANNEL_ID`.
+- [ ] The TMDB refresh, a daily task.
 
 Done when: importing the seed twice leaves exactly 196 films, and a downloaded backup opens in DB Browser for SQLite.
 
@@ -528,8 +548,6 @@ Done when: rebooting the VM brings the bot back by itself, and stopping the bot 
 **M8 · Verdicts and the AI round trip (FR-19 to FR-24)**
 
 - [ ] `/verdict`, saved with an upsert on film and member.
-- [ ] `why_watch` on film and suggestion cards.
-- [ ] `/export` in the Appendix format, including the AI instructions.
 - [ ] An `ImportService` with a dry run and an apply step, used by `/import` and by `scripts/import_seed.py`, which converts the seed format first.
 - [ ] `/import` with its summary and Confirm.
 - [ ] Tests: an import never changes member data, a second import changes nothing, and matching goes slug, then TMDB id, then title and year.
@@ -715,6 +733,7 @@ If any slash command changed, send `@MovieBot sync` in Discord afterwards.
 
 **Backups and restore**
 
+- The bot checks once a day, and posts a new backup when the last one is a week old, so a restart never skips or repeats one.
 - The weekly backup file arrives in the private admin channel. To restore, stop the bot, replace `data/moviebot.db` with the downloaded file, and start it again.
 - Practise a restore once on your laptop. That is the check for NFR-6.
 

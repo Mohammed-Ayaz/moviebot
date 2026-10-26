@@ -25,6 +25,16 @@ VARIABLES = (
 )
 REQUIRED = ("DISCORD_TOKEN", "TMDB_READ_TOKEN", "GUILD_ID")
 DISCORD_IDS = ("GUILD_ID", "ADMIN_ROLE_ID", "BACKUP_CHANNEL_ID")
+# What goes wrong when "Copy Server ID" is pasted where a channel's or a role's ID belongs.
+NOT_THE_SERVER_ID = {
+    "BACKUP_CHANNEL_ID": (
+        "not a channel's: right-click the backup channel and choose Copy Channel ID"
+    ),
+    "ADMIN_ROLE_ID": (
+        "which is also the @everyone role's, so everyone would be an admin: copy the admin "
+        "role's ID instead"
+    ),
+}
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 DEFAULT_DATABASE_PATH = Path("data/moviebot.db")
 DEFAULT_LOG_LEVEL = "INFO"
@@ -46,7 +56,7 @@ class Settings:
     tmdb_read_token: str = field(repr=False)
     guild_id: int
     admin_role_id: int | None = None
-    backup_channel_id: int | None = None  # required from M6
+    backup_channel_id: int | None = None  # weekly backups are off without it
     healthcheck_url: str | None = None  # required from M7
     database_path: Path = DEFAULT_DATABASE_PATH
     log_level: str = DEFAULT_LOG_LEVEL
@@ -61,6 +71,11 @@ class Settings:
             f"{name} must be a Discord ID, which is a whole number"
             for name in DISCORD_IDS
             if values[name] and not _is_discord_id(values[name])
+        ]
+        problems += [
+            f"{name} is the server's ID, {mistake}"
+            for name, mistake in NOT_THE_SERVER_ID.items()
+            if values[name] and values[name] == values["GUILD_ID"]
         ]
         log_level = values["LOG_LEVEL"].upper() or DEFAULT_LOG_LEVEL
         if log_level not in LOG_LEVELS:

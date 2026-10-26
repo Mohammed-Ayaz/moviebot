@@ -80,6 +80,9 @@ class NewFilm:
     tmdb_synced_at: str | None = None
     side: str | None = None
     genre: str | None = None
+    is_indian: bool = True
+    grade: str | None = None
+    why_watch: str | None = None  # written only by imports (FR-20)
 
 
 @dataclass(frozen=True)
@@ -135,6 +138,106 @@ class Suggestion:
     film: Film
     category: Category | None
     filters: SuggestFilters
+
+
+@dataclass(frozen=True)
+class BlocklistEntry:
+    """One row of the blocklist: a film the group decided not to watch, and why."""
+
+    id: int
+    title: str
+    year: int | None
+    reason: str | None
+
+    @property
+    def label(self) -> str:
+        """'Title (Year)', or just the title when the year isn't known."""
+        return self.title if self.year is None else f"{self.title} ({self.year})"
+
+
+@dataclass(frozen=True)
+class Verdict:
+    """One row of the verdicts table: what a member thought of a film (FR-19)."""
+
+    film_id: int
+    user_id: int
+    user_name: str
+    verdict: str
+    comment: str | None
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class ExportFile:
+    """The JSON file /export sends (FR-14)."""
+
+    filename: str
+    content: bytes
+    film_count: int
+
+
+@dataclass(frozen=True)
+class BackupCopy:
+    """A copy of the database file, ready to post to the backup channel (FR-16)."""
+
+    filename: str
+    content: bytes
+    made_at: str
+
+
+@dataclass(frozen=True)
+class SeedFilm:
+    """A film from the seed file, checked and ready to import."""
+
+    slug: str
+    title: str
+    year: int | None
+    category_key: str | None
+    side: str | None
+    genre: str | None
+    is_indian: bool
+    grade: str | None
+    why_watch: str | None
+    watched: bool
+
+
+@dataclass(frozen=True)
+class SeedBlock:
+    """A do-not-watch entry from the seed file."""
+
+    title: str
+    year: int | None
+    reason: str | None
+
+
+@dataclass(frozen=True)
+class Seed:
+    """The whole seed file, checked: its categories, films and do-not-watch entries."""
+
+    categories: tuple[Category, ...]
+    films: tuple[SeedFilm, ...]
+    blocklist: tuple[SeedBlock, ...]
+
+
+@dataclass(frozen=True)
+class SeedReport:
+    """What importing the seed file added."""
+
+    categories_added: int
+    films_added: int
+    films_skipped: int  # already on the list: imported before, or added by a member
+    blocked_added: int
+
+
+@dataclass(frozen=True)
+class TmdbMatches:
+    """What matching films on TMDB did, for the seed import's --match-tmdb and --map."""
+
+    matched: tuple[Film, ...] = ()
+    unmatched: tuple[Film, ...] = ()  # TMDB had no film with that title and year, or that id
+    taken: tuple[tuple[Film, Film], ...] = ()  # (film, the film that already has that TMDB id)
+    unknown_slugs: tuple[str, ...] = ()  # --map lines that name no film
+    stopped: bool = False  # TMDB stopped answering, so the rest wasn't tried
 
 
 class DomainError(Exception):
@@ -221,3 +324,23 @@ class NotWatched(DomainError):
     def __init__(self, film: Film) -> None:
         super().__init__(f"{film.label} isn't marked as watched.")
         self.film = film
+
+
+class NotAllowed(DomainError):
+    """Only an admin may do this."""
+
+    def __init__(self) -> None:
+        super().__init__("Only admins can do that.")
+
+
+class Blocklisted(DomainError):
+    """The film is on the do-not-watch list (FR-17). /add asks before adding it anyway."""
+
+    def __init__(self, entry: BlocklistEntry) -> None:
+        reason = f" {entry.reason}" if entry.reason else ""
+        super().__init__(f"{entry.label} is on the do-not-watch list.{reason}")
+        self.entry = entry
+
+
+class InvalidSeed(DomainError):
+    """The seed file, or the fixes file for --map, isn't in the expected format."""

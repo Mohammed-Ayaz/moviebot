@@ -39,3 +39,15 @@ One dated line per design decision, newest last. When a decision changes, update
 - 2026-10-25: Searching the list for those options happens in Python, ignoring case and punctuation, because the list is small.
 - 2026-10-25: /edit takes the category as an option, with the same suggestions as /add and /list, and the note in the pop-up form.
 - 2026-10-25: Confirm and Cancel expire after 10 minutes and the /edit pop-up after 15, so questions nobody answers don't linger. If someone else removed the film first, Confirm says so.
+- 2026-10-25: The seed import leaves out any film already on the list, by slug, TMDB id, or title and year, so films members added and their edits always win over the seed.
+- 2026-10-25: --match-tmdb searches by title and year, then by title alone, because TMDB's year can be one off. It takes TMDB's id, poster and runtime, but keeps the seed's own title and year.
+- 2026-10-25: The seed's blocklist entries go in with WHERE NOT EXISTS rather than ON CONFLICT, because the UNIQUE (title, year) constraint lets two NULL years through.
+- 2026-10-25: The do-not-watch check matches titles ignoring punctuation as well as case, and a film or entry without a year matches on the title alone.
+- 2026-10-25: Film cards show why_watch from M6 rather than M8, so the 196 imported films show their notes straight away.
+- 2026-10-25: /export uses the spec's Appendix format, AI instructions included, from M6 on, so M8 only adds /import. Members appear by display name, each fetched once without the Server Members intent; someone who left is "a former member".
+- 2026-10-25: The weekly backup is a daily check against a backups table (migration 0002). A backup is due 7 calendar days after the last one posted, so restarts never skip or repeat one, and the first goes out right after the first start.
+- 2026-10-25: The backup copies the database with SQLite's backup API while holding the write lock, switches the copy out of WAL mode so one file holds everything, and posts it from memory. It's only recorded once Discord accepts it.
+- 2026-10-25: BACKUP_CHANNEL_ID stays optional. Without it the bot runs, and logs that weekly backups are off.
+- 2026-10-25: The TMDB refresh runs daily instead of monthly: up to 50 films whose details are over 150 days old, oldest first. It refreshes poster and runtime only, and stops for the day after 3 failures.
+- 2026-10-25: /remove's and /add's Confirm and Cancel share a Question view: only the person who asked can answer, and the buttons go after 10 minutes.
+- 2026-10-26: BACKUP_CHANNEL_ID and ADMIN_ROLE_ID can't be the server's own ID, the usual copy-paste mistake. As ADMIN_ROLE_ID it would make everyone an admin, because the @everyone role shares the server's ID.

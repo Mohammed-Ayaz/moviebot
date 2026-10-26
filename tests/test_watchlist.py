@@ -1,16 +1,19 @@
 """WatchlistService: adding films (FR-2, FR-4) and listing them (FR-3)."""
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from fakes import FakeTmdbClient
 
+from moviebot.db.blocklist import BlocklistRepository
 from moviebot.db.categories import CategoryRepository
 from moviebot.db.films import FilmRepository
 from moviebot.models import (
     AlreadyWatched,
     AmbiguousFilm,
+    Blocklisted,
     Category,
     DuplicateFilm,
     FilmNotFound,
@@ -24,6 +27,7 @@ from moviebot.models import (
     UnknownFilm,
 )
 from moviebot.services.watchlist import WatchlistService, make_slug, titles_match
+from moviebot.tmdb.client import TmdbError
 
 SEED_FILE = Path(__file__).parents[1] / "watchlist_seed.json"
 WATCHED_AT = "2026-10-20T10:00:00Z"
@@ -446,3 +450,179 @@ async def test_category_lookup(watchlist: WatchlistService, launch: Category) ->
     assert await watchlist.category(None) is None
     with pytest.raises(UnknownCategory):
         await watchlist.category("nope")
+
+
+async def test_add_warns_on_blocklisted_film(
+    watchlist: WatchlistService, blocklist: BlocklistRepository, films: FilmRepository
+) -> None:
+    await blocklist.add("Humshakals", 2014, "Nothing happens, crudely.")
+
+    with pytest.raises(Blocklisted) as raised:
+        await watchlist.add_film(title="HUMSHAKALS", year=2014)
+
+    assert raised.value.entry.reason == "Nothing happens, crudely."
+    assert str(raised.value) == (
+        "Humshakals (2014) is on the do-not-watch list. Nothing happens, crudely."
+    )
+    assert await films.list_all() == []
+    added = await watchlist.add_film(title="HUMSHAKALS", year=2014, confirmed=True)
+    assert added.film.title == "HUMSHAKALS"
+
+
+async def test_a_blocklisted_film_picked_from_tmdb_is_caught_too(
+    watchlist: WatchlistService, blocklist: BlocklistRepository, tmdb: FakeTmdbClient
+) -> None:
+    await blocklist.add("Humshakals", 2014, None)
+    tmdb.add(TmdbMovie(301, "Humshakals", 2014, poster_path=None))
+
+    with pytest.raises(Blocklisted, match=r"^Humshakals \(2014\) is on the do-not-watch list\.$"):
+        await watchlist.add_from_tmdb(301)
+    added = await watchlist.add_from_tmdb(301, confirmed=True)
+
+    assert added.film.tmdb_id == 301
+
+
+async def test_the_do_not_watch_check_wants_the_same_year_when_both_have_one(
+    watchlist: WatchlistService, blocklist: BlocklistRepository
+) -> None:
+    await blocklist.add("Humshakals", 2014, None)
+
+    with pytest.raises(Blocklisted):
+        await watchlist.add_film(title="Humshakals")  # no year given: the title is enough
+    another_year = await watchlist.add_film(title="Humshakals", year=2016)
+
+    assert another_year.film.year == 2016
+
+
+async def test_refresh_tmdb_updates_films_fetched_more_than_5_months_ago(
+    watchlist: WatchlistService, films: FilmRepository, tmdb: FakeTmdbClient
+) -> None:
+    tmdb.add(replace(HEROPANTI, poster_path="/new.jpg", runtime_min=150), DON_1978)
+    old = await films.add(
+        NewFilm(
+            slug="heropanti-2014",
+            title="Heropanti",
+            year=2014,
+            tmdb_id=101,
+            poster_path="/old.jpg",
+            runtime_min=146,
+            tmdb_synced_at="2026-05-01T00:00:00Z",  # about 6 months before NOW
+        )
+    )
+    recent = await films.add(
+        NewFilm(
+            slug="don-1978",
+            title="Don",
+            year=1978,
+            tmdb_id=201,
+            tmdb_synced_at="2026-06-01T00:00:00Z",  # under 5 months ago
+        )
+    )
+    typed = await films.add(NewFilm(slug="mystery", title="Mystery", year=None))  # no TMDB id
+
+    assert await watchlist.refresh_tmdb() == 1
+
+    updated = await films.get(old.id)
+    assert updated is not None
+    assert (updated.poster_path, updated.runtime_min) == ("/new.jpg", 150)
+    assert updated.tmdb_synced_at == "2026-10-21T18:00:00Z"
+    assert (updated.title, updated.year) == ("Heropanti", 2014)  # only TMDB's details change
+    assert await films.get(recent.id) == recent
+    assert await films.get(typed.id) == typed
+
+
+async def test_refresh_tmdb_skips_a_film_tmdb_no_longer_has(
+    watchlist: WatchlistService, films: FilmRepository, tmdb: FakeTmdbClient
+) -> None:
+    tmdb.add(HEROPANTI)
+    gone = await films.add(
+        NewFilm(
+            slug="gone", title="Gone", year=2000, tmdb_id=999, tmdb_synced_at="2026-01-01T00:00:00Z"
+        )
+    )
+    await films.add(
+        NewFilm(
+            slug="heropanti-2014",
+            title="Heropanti",
+            year=2014,
+            tmdb_id=101,
+            tmdb_synced_at="2026-02-01T00:00:00Z",
+        )
+    )
+
+    assert await watchlist.refresh_tmdb() == 1
+    assert await films.get(gone.id) == gone  # tried again on the next run
+
+
+async def test_refresh_tmdb_takes_the_oldest_films_first_and_stops_at_the_limit(
+    watchlist: WatchlistService, films: FilmRepository, tmdb: FakeTmdbClient
+) -> None:
+    tmdb.add(HEROPANTI, DON_1978)
+    newer = await films.add(
+        NewFilm(
+            slug="don-1978",
+            title="Don",
+            year=1978,
+            tmdb_id=201,
+            tmdb_synced_at="2026-03-01T00:00:00Z",
+        )
+    )
+    await films.add(
+        NewFilm(
+            slug="heropanti-2014",
+            title="Heropanti",
+            year=2014,
+            tmdb_id=101,
+            tmdb_synced_at="2026-02-01T00:00:00Z",
+        )
+    )
+
+    assert await watchlist.refresh_tmdb(limit=1) == 1
+    assert await films.get(newer.id) == newer
+
+
+async def test_refresh_tmdb_changes_nothing_while_tmdb_is_down(
+    watchlist: WatchlistService, films: FilmRepository, tmdb: FakeTmdbClient
+) -> None:
+    tmdb.add(HEROPANTI)
+    tmdb.down = True
+    film = await films.add(
+        NewFilm(
+            slug="heropanti-2014",
+            title="Heropanti",
+            year=2014,
+            tmdb_id=101,
+            tmdb_synced_at="2026-02-01T00:00:00Z",
+        )
+    )
+
+    assert await watchlist.refresh_tmdb() == 0
+    assert await films.get(film.id) == film
+
+
+async def test_refresh_tmdb_gives_up_for_the_day_after_three_failures(
+    watchlist: WatchlistService,
+    films: FilmRepository,
+    tmdb: FakeTmdbClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for number in range(5):
+        await films.add(
+            NewFilm(
+                slug=f"film-{number}",
+                title=f"Film {number}",
+                year=None,
+                tmdb_id=900 + number,
+                tmdb_synced_at="2026-01-01T00:00:00Z",
+            )
+        )
+    asked: list[int] = []
+
+    async def details(movie_id: int) -> TmdbMovie:
+        asked.append(movie_id)
+        raise TmdbError("TMDB answered 503")
+
+    monkeypatch.setattr(tmdb, "details", details)
+
+    assert await watchlist.refresh_tmdb() == 0
+    assert asked == [900, 901, 902]

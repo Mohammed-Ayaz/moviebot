@@ -1,6 +1,5 @@
 """Startup wiring follows AGENTS.md. The bot is built offline: nothing here logs in to Discord."""
 
-from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock
 
 import discord
@@ -8,21 +7,10 @@ import pytest
 
 from moviebot.bot import MovieBot, MovieTree
 from moviebot.config import Settings
+from moviebot.services.backup import BackupService
 from moviebot.services.picker import PickerService
 from moviebot.services.watchlist import WatchlistService
 from moviebot.ui.views import ListView
-
-SETTINGS = Settings.from_env(
-    {"DISCORD_TOKEN": "discord-test-token", "TMDB_READ_TOKEN": "tmdb-test-token", "GUILD_ID": "1"}
-)
-
-
-@pytest.fixture
-async def bot(watchlist: WatchlistService, picker: PickerService) -> AsyncIterator[MovieBot]:
-    """A bot that has run setup_hook, as it does at startup, but never connects."""
-    async with MovieBot(SETTINGS, watchlist=watchlist, picker=picker) as movie_bot:
-        await movie_bot.setup_hook()
-        yield movie_bot
 
 
 def test_no_privileged_intents(bot: MovieBot) -> None:
@@ -48,6 +36,7 @@ def test_slash_commands_are_registered_on_movie_tree(bot: MovieBot) -> None:
         "about",
         "add",
         "edit",
+        "export",
         "list",
         "ping",
         "remove",
@@ -58,9 +47,13 @@ def test_slash_commands_are_registered_on_movie_tree(bot: MovieBot) -> None:
 
 
 async def test_startup_never_syncs(
-    monkeypatch: pytest.MonkeyPatch, watchlist: WatchlistService, picker: PickerService
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Settings,
+    watchlist: WatchlistService,
+    picker: PickerService,
+    backup: BackupService,
 ) -> None:
-    async with MovieBot(SETTINGS, watchlist=watchlist, picker=picker) as movie_bot:
+    async with MovieBot(settings, watchlist=watchlist, picker=picker, backup=backup) as movie_bot:
         sync = AsyncMock()
         monkeypatch.setattr(movie_bot.tree, "sync", sync)
         await movie_bot.setup_hook()

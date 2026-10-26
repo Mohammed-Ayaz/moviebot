@@ -12,10 +12,14 @@ import discord
 
 from moviebot.bot import MovieBot
 from moviebot.config import ConfigError, Settings, load_settings
+from moviebot.db.backups import BackupRepository
+from moviebot.db.blocklist import BlocklistRepository
 from moviebot.db.categories import CategoryRepository
 from moviebot.db.database import open_database
 from moviebot.db.films import FilmRepository
 from moviebot.db.suggestions import SuggestionRepository
+from moviebot.db.verdicts import VerdictRepository
+from moviebot.services.backup import BackupService
 from moviebot.services.picker import PickerService
 from moviebot.services.watchlist import WatchlistService
 from moviebot.tmdb.client import TmdbClient
@@ -31,13 +35,17 @@ async def main(settings: Settings) -> None:
             films, categories = FilmRepository(db), CategoryRepository(db)
             clock = partial(datetime.now, UTC)
             tmdb = TmdbClient(session, settings.tmdb_read_token)
-            watchlist = WatchlistService(films, categories, tmdb, clock=clock)
+            blocklist = BlocklistRepository(db)
+            watchlist = WatchlistService(films, categories, blocklist, tmdb, clock=clock)
             # Picking films needs no cryptographic randomness, hence the noqa for ruff's S311.
             rng = random.Random()  # noqa: S311
             picker = PickerService(
                 films, categories, SuggestionRepository(db), rng=rng, clock=clock
             )
-            async with MovieBot(settings, watchlist=watchlist, picker=picker) as bot:
+            verdicts = VerdictRepository(db)
+            backups = BackupRepository(db)
+            backup = BackupService(films, categories, blocklist, verdicts, backups, clock=clock)
+            async with MovieBot(settings, watchlist=watchlist, picker=picker, backup=backup) as bot:
                 await bot.start(settings.discord_token)
     finally:
         await db.close()

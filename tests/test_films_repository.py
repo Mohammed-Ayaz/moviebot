@@ -183,3 +183,70 @@ async def test_removing_a_film_removes_its_suggestion_history(
 
     rows = await db.conn.execute_fetchall("SELECT count(*) FROM suggestions")
     assert list(rows)[0][0] == 0
+
+
+async def test_add_if_new_leaves_out_a_film_already_listed(films: FilmRepository) -> None:
+    first = await films.add_if_new(
+        NewFilm(
+            slug="heropanti-2014",
+            title="Heropanti",
+            year=2014,
+            tmdb_id=1,
+            why_watch="An AI wrote this.",
+            grade="yours",
+            is_indian=False,
+        )
+    )
+
+    assert first is not None
+    assert (first.why_watch, first.grade, first.is_indian) == ("An AI wrote this.", "yours", False)
+    assert await films.add_if_new(NewFilm(slug="heropanti-2014", title="Other", year=2000)) is None
+    assert await films.add_if_new(NewFilm(slug="x-2014", title="HEROPANTI", year=2014)) is None
+    assert await films.add_if_new(NewFilm(slug="y", title="Y", year=None, tmdb_id=1)) is None
+    assert await films.list_all() == [first]
+
+
+async def test_set_tmdb_stores_the_details_and_get_by_slug_finds_the_film(
+    films: FilmRepository,
+) -> None:
+    film = await films.add(NewFilm(slug="heropanti-2014", title="Heropanti", year=2014))
+
+    updated = await films.set_tmdb(
+        film.id,
+        tmdb_id=280391,
+        poster_path="/heropanti.jpg",
+        runtime_min=146,
+        synced_at="2026-10-21T18:00:00Z",
+    )
+
+    assert updated is not None
+    assert (updated.tmdb_id, updated.poster_path, updated.runtime_min) == (
+        280391,
+        "/heropanti.jpg",
+        146,
+    )
+    assert updated.tmdb_synced_at == "2026-10-21T18:00:00Z"
+    assert await films.get_by_slug("heropanti-2014") == updated
+    assert await films.get_by_slug("nope") is None
+    missing = await films.set_tmdb(
+        999, tmdb_id=1, poster_path=None, runtime_min=None, synced_at="2026-10-21T18:00:00Z"
+    )
+    assert missing is None
+
+
+async def test_needing_refresh_finds_tmdb_films_fetched_before_the_cutoff(
+    films: FilmRepository,
+) -> None:
+    old = await films.add(
+        NewFilm(slug="a", title="A", year=None, tmdb_id=1, tmdb_synced_at="2026-01-01T00:00:00Z")
+    )
+    never = await films.add(NewFilm(slug="b", title="B", year=None, tmdb_id=2))
+    await films.add(
+        NewFilm(slug="c", title="C", year=None, tmdb_id=3, tmdb_synced_at="2026-09-01T00:00:00Z")
+    )
+    await films.add(NewFilm(slug="d", title="D", year=None))  # not on TMDB
+
+    due = await films.needing_refresh(synced_before="2026-05-01T00:00:00Z", limit=10)
+
+    assert due == [never, old]  # never fetched comes first, then the oldest
+    assert await films.needing_refresh(synced_before="2026-05-01T00:00:00Z", limit=1) == [never]

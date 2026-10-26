@@ -23,36 +23,48 @@ class FilmRepository:
             rows = await conn.execute_fetchall(
                 """
                 INSERT INTO films (
-                    slug, tmdb_id, title, year, category_key, note, added_by, watched_at,
-                    poster_path, runtime_min, tmdb_synced_at, side, genre
+                    slug, tmdb_id, title, year, category_key, side, genre, is_indian, grade,
+                    note, why_watch, poster_path, runtime_min, tmdb_synced_at, added_by, watched_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 RETURNING *
                 """,
-                (
-                    film.slug,
-                    film.tmdb_id,
-                    film.title,
-                    film.year,
-                    film.category_key,
-                    film.note,
-                    film.added_by,
-                    film.watched_at,
-                    film.poster_path,
-                    film.runtime_min,
-                    film.tmdb_synced_at,
-                    film.side,
-                    film.genre,
-                ),
+                _values(film),
             )
         added = _first(rows)
         if added is None:
             raise RuntimeError("INSERT ... RETURNING returned no row")
         return added
 
+    async def add_if_new(self, film: NewFilm) -> Film | None:
+        """Insert a film unless one with the same slug, TMDB id, or title and year is listed.
+
+        Returns the new film, or None when it was left out. ON CONFLICT DO NOTHING is what makes
+        the seed import safe to run twice: it never overwrites a film.
+        """
+        async with self._db.transaction() as conn:
+            rows = await conn.execute_fetchall(
+                """
+                INSERT INTO films (
+                    slug, tmdb_id, title, year, category_key, side, genre, is_indian, grade,
+                    note, why_watch, poster_path, runtime_min, tmdb_synced_at, added_by, watched_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT DO NOTHING
+                RETURNING *
+                """,
+                _values(film),
+            )
+        return _first(rows)
+
     async def get(self, film_id: int) -> Film | None:
         """The film with this id, if there is one."""
         rows = await self._db.conn.execute_fetchall("SELECT * FROM films WHERE id = ?", (film_id,))
+        return _first(rows)
+
+    async def get_by_slug(self, slug: str) -> Film | None:
+        """The film with this slug, if there is one."""
+        rows = await self._db.conn.execute_fetchall("SELECT * FROM films WHERE slug = ?", (slug,))
         return _first(rows)
 
     async def get_by_tmdb_id(self, tmdb_id: int) -> Film | None:
@@ -151,6 +163,19 @@ class FilmRepository:
         )
         return [_film(row) for row in rows]
 
+    async def needing_refresh(self, *, synced_before: str, limit: int) -> list[Film]:
+        """Films on TMDB whose details were fetched before this time, or never, oldest first."""
+        rows = await self._db.conn.execute_fetchall(
+            """
+            SELECT * FROM films
+            WHERE tmdb_id IS NOT NULL AND (tmdb_synced_at IS NULL OR tmdb_synced_at < ?)
+            ORDER BY tmdb_synced_at, id
+            LIMIT ?
+            """,
+            (synced_before, limit),
+        )
+        return [_film(row) for row in rows]
+
     async def update(
         self, film_id: int, *, note: str | None, category_key: str | None
     ) -> Film | None:
@@ -159,6 +184,27 @@ class FilmRepository:
             rows = await conn.execute_fetchall(
                 "UPDATE films SET note = ?, category_key = ? WHERE id = ? RETURNING *",
                 (note, category_key, film_id),
+            )
+        return _first(rows)
+
+    async def set_tmdb(
+        self,
+        film_id: int,
+        *,
+        tmdb_id: int,
+        poster_path: str | None,
+        runtime_min: int | None,
+        synced_at: str,
+    ) -> Film | None:
+        """Store a film's TMDB id, poster and runtime. None if there's no such film."""
+        async with self._db.transaction() as conn:
+            rows = await conn.execute_fetchall(
+                """
+                UPDATE films SET tmdb_id = ?, poster_path = ?, runtime_min = ?, tmdb_synced_at = ?
+                WHERE id = ?
+                RETURNING *
+                """,
+                (tmdb_id, poster_path, runtime_min, synced_at, film_id),
             )
         return _first(rows)
 
@@ -188,6 +234,28 @@ class FilmRepository:
             deleted = cursor.rowcount > 0
             await cursor.close()
         return deleted
+
+
+def _values(film: NewFilm) -> tuple[object, ...]:
+    """A NewFilm's values, in the column order of the INSERT statements above."""
+    return (
+        film.slug,
+        film.tmdb_id,
+        film.title,
+        film.year,
+        film.category_key,
+        film.side,
+        film.genre,
+        int(film.is_indian),
+        film.grade,
+        film.note,
+        film.why_watch,
+        film.poster_path,
+        film.runtime_min,
+        film.tmdb_synced_at,
+        film.added_by,
+        film.watched_at,
+    )
 
 
 def _film(row: aiosqlite.Row) -> Film:

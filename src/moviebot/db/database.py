@@ -44,6 +44,17 @@ class Database:
                 await self.conn.rollback()
                 raise
 
+    async def backup_to(self, path: Path) -> None:
+        """Copy the whole database into a new file at path, with SQLite's backup API (FR-16).
+
+        The copy runs in aiosqlite's worker thread, so the bot keeps answering. It holds the
+        write lock, so it never catches a transaction half done. The copy is then switched out
+        of WAL mode, so the one file holds everything.
+        """
+        async with self._write_lock, aiosqlite.connect(path) as target:
+            await self.conn.backup(target)
+            await target.execute_fetchall("PRAGMA journal_mode = DELETE")
+
     async def close(self) -> None:
         """Close the connection, once, at shutdown."""
         await self.conn.close()

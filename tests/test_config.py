@@ -80,6 +80,30 @@ def test_invalid_id_is_rejected(name: str, value: str) -> None:
         Settings.from_env({**MINIMAL_ENV, name: value})
 
 
+@pytest.mark.parametrize(
+    ("name", "problem"),
+    [
+        (
+            "BACKUP_CHANNEL_ID",
+            "BACKUP_CHANNEL_ID is the server's ID, not a channel's: right-click the backup "
+            "channel and choose Copy Channel ID",
+        ),
+        (
+            "ADMIN_ROLE_ID",
+            "ADMIN_ROLE_ID is the server's ID, which is also the @everyone role's, so everyone "
+            "would be an admin: copy the admin role's ID instead",
+        ),
+    ],
+)
+def test_the_servers_own_id_is_refused_for_a_channel_or_a_role(name: str, problem: str) -> None:
+    env = {**MINIMAL_ENV, name: MINIMAL_ENV["GUILD_ID"]}
+
+    with pytest.raises(ConfigError) as raised:
+        Settings.from_env(env)
+
+    assert raised.value.problems == [problem]
+
+
 def test_unknown_log_level_is_rejected() -> None:
     with pytest.raises(ConfigError, match="LOG_LEVEL must be one of"):
         Settings.from_env({**MINIMAL_ENV, "LOG_LEVEL": "verbose"})

@@ -1,8 +1,9 @@
-"""Embeds: the film card, the suggestion card, one page of /list, and /about."""
+"""Embeds and texts: the film card, the suggestion card, one page of /list, /about, and the
+private reply to /add."""
 
 import discord
 
-from moviebot.models import Category, Film, FilmPage, Suggestion
+from moviebot.models import AddedFilm, Category, Film, FilmPage, Suggestion
 
 LIST_TITLES = {"unwatched": "Unwatched films", "watched": "Watched films", "all": "All films"}
 EMPTY_LIST = "Nothing here yet. Add a film with /add."
@@ -13,8 +14,10 @@ SIDE_LABELS = {"bad": "hate-watch", "good": "actually good"}
 
 
 def film_card(film: Film, category: Category | None) -> discord.Embed:
-    """A film's card: poster, 'Title (Year)', runtime, category, note, and who added it."""
+    """A film's card: 'Title (Year)', the note, why to watch it, runtime, category, poster."""
     embed = discord.Embed(title=film.label, description=film.note)
+    if film.why_watch:
+        embed.add_field(name="Why watch it", value=film.why_watch, inline=False)
     if film.runtime_min:
         embed.add_field(name="Runtime", value=_runtime(film.runtime_min))
     if category is not None:
@@ -26,6 +29,19 @@ def film_card(film: Film, category: Category | None) -> discord.Embed:
     if film.tmdb_id is not None:
         embed.set_footer(text="Film data from TMDB")
     return embed
+
+
+def added_text(added: AddedFilm) -> str:
+    """The private reply to /add: what was added, and anything the adder should know."""
+    lines = [f"Added {discord.utils.escape_markdown(added.film.label)}."]
+    if added.tmdb == "not_found":
+        lines.append("It's saved without a poster. Next time, pick the film from the list.")
+    elif added.tmdb == "unavailable":
+        lines.append("TMDB isn't answering, so it's saved without a poster.")
+    if added.same_title is not None:
+        same = discord.utils.escape_markdown(added.same_title.label)
+        lines.append(f"Heads up: {same} is already on the list, so this may be a duplicate.")
+    return "\n".join(lines)
 
 
 def suggestion_card(suggestion: Suggestion) -> discord.Embed:

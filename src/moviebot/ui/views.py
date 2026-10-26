@@ -1,13 +1,14 @@
-"""Views: the buttons under a /list message, and Confirm and Cancel for /remove."""
+"""Views: the buttons under a /list message, and the Confirm and Cancel questions."""
 
 import logging
+from collections.abc import Awaitable, Callable
 
 import discord
 
-from moviebot.models import Film, FilmNotFound, FilmPage
+from moviebot.models import AddedFilm, DomainError, Film, FilmNotFound, FilmPage
 from moviebot.services.watchlist import WatchlistService
 from moviebot.ui.buttons import SUGGEST_ID, SuggestButton
-from moviebot.ui.embeds import list_embed
+from moviebot.ui.embeds import added_text, film_card, list_embed
 from moviebot.ui.errors import report_error
 
 log = logging.getLogger(__name__)
@@ -85,22 +86,50 @@ def suggest_view() -> discord.ui.View:
     return view
 
 
-class ConfirmRemoveView(discord.ui.View):
+class Question(discord.ui.View):
+    """A private question with Confirm and Cancel, which only the person who asked can answer.
+
+    Subclasses add the two buttons. After 10 minutes the buttons go, and the message says so.
+    """
+
+    expired = "This question expired."
+
+    def __init__(self, *, user_id: int) -> None:
+        super().__init__(timeout=CONFIRM_TIMEOUT)
+        self.user_id = user_id
+        self.interaction: discord.Interaction | None = None  # the command, set once it's answered
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Only the person who asked can answer. The question is private anyway."""
+        return interaction.user.id == self.user_id
+
+    async def on_timeout(self) -> None:
+        """Take the buttons away once they stop working."""
+        if self.interaction is not None:
+            try:
+                await self.interaction.edit_original_response(content=self.expired, view=None)
+            except discord.HTTPException:
+                log.debug("Couldn't take the buttons off an old question", exc_info=True)
+
+    async def on_error(
+        self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item, /
+    ) -> None:
+        """Report a failed click the same way as a failed command."""
+        await report_error(interaction, error)
+
+
+class ConfirmRemoveView(Question):
     """Confirm and Cancel under /remove's private question (FR-11).
 
     Confirm removes the film and says publicly who removed it, so nothing disappears silently.
     """
 
+    expired = "Nothing was removed: this question expired."
+
     def __init__(self, watchlist: WatchlistService, film: Film, *, user_id: int) -> None:
-        super().__init__(timeout=CONFIRM_TIMEOUT)
+        super().__init__(user_id=user_id)
         self.watchlist = watchlist
         self.film = film
-        self.user_id = user_id
-        self.interaction: discord.Interaction | None = None  # the /remove, set once it's answered
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Only the person who asked can answer. The question is private anyway."""
-        return interaction.user.id == self.user_id
 
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -122,18 +151,35 @@ class ConfirmRemoveView(discord.ui.View):
         label = discord.utils.escape_markdown(self.film.label)
         await interaction.response.edit_message(content=f"Kept {label}.", view=None)
 
-    async def on_timeout(self) -> None:
-        """Take the buttons away once they stop working."""
-        if self.interaction is not None:
-            try:
-                await self.interaction.edit_original_response(
-                    content="Nothing was removed: this question expired.", view=None
-                )
-            except discord.HTTPException:
-                log.debug("Couldn't take the buttons off an old /remove question", exc_info=True)
 
-    async def on_error(
-        self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item, /
+class ConfirmAddView(Question):
+    """Confirm and Cancel under /add's question about a film on the do-not-watch list (FR-17).
+
+    Confirm adds the film after all and posts its card publicly, like a normal /add.
+    """
+
+    expired = "Nothing was added: this question expired."
+
+    def __init__(
+        self, add: Callable[[], Awaitable[AddedFilm]], *, label: str, user_id: int
     ) -> None:
-        """Report a failed click the same way as a failed command."""
-        await report_error(interaction, error)
+        super().__init__(user_id=user_id)
+        self.add = add  # adds the film, skipping the do-not-watch check
+        self.label = label
+
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.stop()
+        try:
+            added = await self.add()
+        except DomainError as error:  # for example, someone else added it in the meantime
+            await interaction.response.edit_message(content=str(error), view=None)
+            return
+        await interaction.response.edit_message(content=added_text(added), view=None)
+        await interaction.followup.send(embed=film_card(added.film, added.category))
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.stop()
+        label = discord.utils.escape_markdown(self.label)
+        await interaction.response.edit_message(content=f"Didn't add {label}.", view=None)

@@ -1,14 +1,18 @@
-"""Confirm and Cancel under /remove, and the /edit pop-up, driven the way Discord drives them."""
+"""Confirm and Cancel under /remove and /add, and the /edit pop-up, driven as Discord does."""
 
+from functools import partial
 from typing import Any, cast
 
 import discord
 import pytest
+from fakes import FakeTmdbClient
 
-from moviebot.models import Category, Film, FilmNotFound
+from moviebot.db.blocklist import BlocklistRepository
+from moviebot.db.films import FilmRepository
+from moviebot.models import Category, Film, FilmNotFound, TmdbMovie
 from moviebot.services.watchlist import WatchlistService
 from moviebot.ui.modals import EditFilmModal
-from moviebot.ui.views import ConfirmRemoveView
+from moviebot.ui.views import ConfirmAddView, ConfirmRemoveView
 
 ASKER = 111
 SOMEONE_ELSE = 222
@@ -42,8 +46,10 @@ class FakeFollowup:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
 
-    async def send(self, content: str, **fields: Any) -> None:
-        self.sent.append({"content": content, **fields})
+    async def send(self, content: str | None = None, **fields: Any) -> None:
+        if content is not None:
+            fields["content"] = content
+        self.sent.append(fields)
 
 
 class FakeInteraction:
@@ -182,3 +188,72 @@ async def test_emptying_the_note_clears_it(watchlist: WatchlistService) -> None:
     await modal.on_submit(real(FakeInteraction()))
 
     assert (await watchlist.get_film(film.id)).note is None
+
+
+HUMSHAKALS = TmdbMovie(301, "Humshakals", 2014, poster_path="/humshakals.jpg")
+
+
+def add_anyway(watchlist: WatchlistService) -> ConfirmAddView:
+    """The question /add asks about a film on the do-not-watch list."""
+    add = partial(watchlist.add_film, title="Humshakals", year=2014, added_by=ASKER, confirmed=True)
+    return ConfirmAddView(add, label="Humshakals (2014)", user_id=ASKER)
+
+
+async def test_confirm_adds_a_do_not_watch_film_and_posts_its_card(
+    watchlist: WatchlistService, blocklist: BlocklistRepository, tmdb: FakeTmdbClient
+) -> None:
+    await blocklist.add("Humshakals", 2014, "Nothing happens.")
+    tmdb.add(HUMSHAKALS)
+    view = add_anyway(watchlist)
+    click = FakeInteraction()
+
+    await view.confirm.callback(real(click))
+
+    assert click.response.edits == [{"content": "Added Humshakals (2014).", "view": None}]
+    [card] = click.followup.sent
+    assert list(card) == ["embed"]  # not private: everyone sees the card
+    assert card["embed"].title == "Humshakals (2014)"
+    assert view.is_finished()
+
+
+async def test_cancel_leaves_a_do_not_watch_film_off_the_list(
+    watchlist: WatchlistService, films: FilmRepository
+) -> None:
+    view = add_anyway(watchlist)
+    click = FakeInteraction()
+
+    await view.cancel.callback(real(click))
+
+    assert click.response.edits == [{"content": "Didn't add Humshakals (2014).", "view": None}]
+    assert click.followup.sent == []
+    assert await films.list_all() == []
+
+
+async def test_confirm_after_someone_else_added_it_says_so(
+    watchlist: WatchlistService, tmdb: FakeTmdbClient
+) -> None:
+    tmdb.add(HUMSHAKALS)
+    view = add_anyway(watchlist)
+    await watchlist.add_film(title="Humshakals", year=2014, confirmed=True)
+    click = FakeInteraction()
+
+    await view.confirm.callback(real(click))
+
+    assert click.response.edits == [
+        {"content": "Humshakals (2014) is already on the list.", "view": None}
+    ]
+    assert click.followup.sent == []
+
+
+async def test_an_expired_add_question_says_nothing_was_added(
+    watchlist: WatchlistService,
+) -> None:
+    view = add_anyway(watchlist)
+    asked = FakeInteraction()
+    view.interaction = real(asked)
+
+    await view.on_timeout()
+
+    assert asked.original_edits == [
+        {"content": "Nothing was added: this question expired.", "view": None}
+    ]

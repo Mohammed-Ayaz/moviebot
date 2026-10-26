@@ -5,18 +5,19 @@ Rules the service enforces come back as DomainErrors, which MovieTree shows priv
 
 import asyncio
 import re
+from functools import partial
 from typing import cast
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from moviebot.models import AddedFilm, Film, Show
+from moviebot.models import AddedFilm, Blocklisted, Film, Show
 from moviebot.services.watchlist import MAX_NOTE, MAX_TITLE, MAX_YEAR, MIN_YEAR, WatchlistService
 from moviebot.ui.choices import category_choices, film_choices, tmdb_choices
-from moviebot.ui.embeds import film_card, list_embed
+from moviebot.ui.embeds import added_text, film_card, list_embed
 from moviebot.ui.modals import EditFilmModal
-from moviebot.ui.views import ConfirmRemoveView, ListView, suggest_view
+from moviebot.ui.views import ConfirmAddView, ConfirmRemoveView, ListView, suggest_view
 
 TMDB_PICK = re.compile(r"tmdb:(\d+)")  # the value of a TMDB suggestion picked from the list
 FILM_PICK = re.compile(r"film:(\d+)")  # the value of a film picked from the list
@@ -53,24 +54,54 @@ class WatchlistCog(commands.Cog):
         """FR-2 and FR-5: save the film, confirm privately, then post its card publicly.
 
         TMDB can take a few seconds, so the reply is deferred privately first. Errors raised
-        after that still reach the user privately, through MovieTree.
+        after that still reach the user privately, through MovieTree. A film on the do-not-watch
+        list is only added after Confirm (FR-17).
         """
         await interaction.response.defer(ephemeral=True, thinking=True)
+        add = partial(
+            self._add, title, year=year, category=category, note=note, added_by=interaction.user.id
+        )
+        try:
+            added = await add(confirmed=False)
+        except Blocklisted as blocked:
+            view = ConfirmAddView(
+                partial(add, confirmed=True), label=blocked.entry.label, user_id=interaction.user.id
+            )
+            question = discord.utils.escape_markdown(str(blocked))
+            await interaction.followup.send(f"{question} Add it anyway?", view=view, ephemeral=True)
+            view.interaction = interaction
+            return
+        await interaction.followup.send(added_text(added), ephemeral=True)
+        await interaction.followup.send(embed=film_card(added.film, added.category))
+
+    async def _add(
+        self,
+        title: str,
+        *,
+        year: int | None,
+        category: str | None,
+        note: str | None,
+        added_by: int,
+        confirmed: bool,
+    ) -> AddedFilm:
+        """Add the film picked from TMDB's suggestions, or else the title as typed."""
         pick = TMDB_PICK.fullmatch(title)
         if pick is not None:
-            added = await self.watchlist.add_from_tmdb(
-                int(pick[1]), category_key=category, note=note, added_by=interaction.user.id
-            )
-        else:
-            added = await self.watchlist.add_film(
-                title=title,
-                year=year,
+            return await self.watchlist.add_from_tmdb(
+                int(pick[1]),
                 category_key=category,
                 note=note,
-                added_by=interaction.user.id,
+                added_by=added_by,
+                confirmed=confirmed,
             )
-        await interaction.followup.send(_confirmation(added), ephemeral=True)
-        await interaction.followup.send(embed=film_card(added.film, added.category))
+        return await self.watchlist.add_film(
+            title=title,
+            year=year,
+            category_key=category,
+            note=note,
+            added_by=added_by,
+            confirmed=confirmed,
+        )
 
     @add.autocomplete("title")
     async def add_title(
@@ -206,16 +237,3 @@ class WatchlistCog(commands.Cog):
         if pick is not None:
             return await self.watchlist.get_film(int(pick[1]))
         return await self.watchlist.film_named(value, watched=watched)
-
-
-def _confirmation(added: AddedFilm) -> str:
-    """The private reply to /add: what was added, and anything the adder should know."""
-    lines = [f"Added {discord.utils.escape_markdown(added.film.label)}."]
-    if added.tmdb == "not_found":
-        lines.append("It's saved without a poster. Next time, pick the film from the list.")
-    elif added.tmdb == "unavailable":
-        lines.append("TMDB isn't answering, so it's saved without a poster.")
-    if added.same_title is not None:
-        same = discord.utils.escape_markdown(added.same_title.label)
-        lines.append(f"Heads up: {same} is already on the list, so this may be a duplicate.")
-    return "\n".join(lines)
